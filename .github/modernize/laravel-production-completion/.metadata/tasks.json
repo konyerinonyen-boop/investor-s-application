@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Implementation tasks for completing the assessed Laravel application gaps.",
+  "tasks": [
+    {
+      "type": "transform",
+      "id": "001-persistence-and-architecture-foundation",
+      "description": "Strengthen MySQL persistence and extend the existing Request-Service-Repository architecture.",
+      "reason": "The application has working service and repository structures, but the assessment identifies MySQL readiness, data integrity, and scalable boundary gaps that affect the workflows built on them.",
+      "requirements": "Addresses assessment gaps: MySQL integrity/readiness, robust monetary persistence, and scalable Request-Service-Repository architecture. Retain existing controllers, Actions, Services, Repositories, models, and core tables; make focused additions rather than rewriting them. Ensure schema constraints, indexes, migrations, and persistence behavior support MySQL and concurrent financial operations. Use exact monetary representations appropriate to the domain and keep validation, orchestration, and persistence responsibilities in their existing architectural layers.",
+      "dependencies": [],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "002-kyc-upload-review-and-resumption",
+      "description": "Complete the secure KYC upload, review, and resumption lifecycle.",
+      "reason": "The current submission accepts optional path strings and allows user-writable review notes, leaving the KYC lifecycle incomplete and insufficiently controlled.",
+      "requirements": "Addresses assessment gaps: KYC upload/review lifecycle and resumption. Preserve the existing KYC endpoints and services while requiring validated uploads, secure storage references, explicit lifecycle states, and resumable incomplete submissions. Prevent applicants from setting or changing reviewer-only decisions and notes. Support authorized review outcomes, rejection reasons, and resubmission without losing prior decision history.",
+      "dependencies": [
+        "001-persistence-and-architecture-foundation"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "003-equity-loan-transactions-and-repayments",
+      "description": "Make equity and loan transactions atomic and persist their repayment lifecycles.",
+      "reason": "The assessment reports float-based transaction handling, unit reservation outside a transaction/lock, and incomplete repayment persistence.",
+      "requirements": "Addresses assessment gaps: robust equity/loan transaction handling and repayment persistence. Preserve the existing investment and loan flows while ensuring eligibility, available-unit checks, reservation, financial records, and state transitions commit or roll back together under concurrent requests. Replace float-based financial calculations with consistent monetary precision. Persist loan repayment schedules, payment allocations, balances, due/paid status, and relevant transaction history so retries and portfolio views remain consistent.",
+      "dependencies": [
+        "001-persistence-and-architecture-foundation"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "004-payment-provider-webhook-and-idempotency",
+      "description": "Complete payment initiation and reliable provider callback processing.",
+      "reason": "Payment support is currently schema-only, with no provider integration, webhook processing, or idempotency flow.",
+      "requirements": "Addresses assessment gaps: payment provider/webhook/idempotency flows. Add the application-facing payment lifecycle needed by equity purchases, loan repayments, and applicable fees while keeping provider-specific behavior behind a maintainable boundary. Verify callbacks, persist provider references and outcomes, safely handle duplicate and out-of-order events, and make retries recoverable without double charging or double applying a payment. Do not place credentials in source or logs.",
+      "dependencies": [
+        "003-equity-loan-transactions-and-repayments"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "005-agreements-and-document-access",
+      "description": "Provide authorized agreement generation, acceptance, and document access.",
+      "reason": "The assessment identifies no agreement flow and no completed document access behavior.",
+      "requirements": "Addresses assessment gaps: agreement/document access. Complete the agreement lifecycle for relevant investments and loans, including association to the correct user and transaction, acceptance/status tracking, and access to the resulting document. Enforce ownership and role checks for viewing or downloading private documents; do not expose storage paths or permit access based only on an opaque identifier. Preserve required agreement history when terms or document versions change.",
+      "dependencies": [
+        "001-persistence-and-architecture-foundation"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "006-api-resources-policies-and-rbac",
+      "description": "Standardize API resources and enforce policy-based authorization and role permissions.",
+      "reason": "The current API has no comprehensive policy/permission coverage, and its resources and authorization need to support both customer and staff workflows.",
+      "requirements": "Addresses assessment gaps: API resources/authorization and comprehensive policies/permissions. Preserve existing routes and response behavior where practical. Define consistent API resource representations and validation/error behavior for the affected KYC, opportunity, equity, loan, repayment, payment, agreement, and portfolio workflows. Enforce ownership, role, and state-transition authorization server-side; establish least-privilege staff and customer capabilities and prevent mass assignment or client-selected privileged fields.",
+      "dependencies": [
+        "002-kyc-upload-review-and-resumption",
+        "003-equity-loan-transactions-and-repayments",
+        "004-payment-provider-webhook-and-idempotency",
+        "005-agreements-and-document-access"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "007-filament-resources-and-admin-workflows",
+      "description": "Deliver production Filament resources and permission-aware administrative workflows.",
+      "reason": "The current Filament panel is only a starter panel and has no production Resources.",
+      "requirements": "Addresses assessment gaps: production Filament resources and RBAC. Build the required staff resources and actions for KYC review, opportunities, investments, loans/repayments, payments, agreements/documents, and relevant audit history. Reuse application services and policies rather than duplicating business rules in the panel. Restrict navigation, records, and actions by role and authorization; require safe confirmation and preserve auditability for high-impact decisions.",
+      "dependencies": [
+        "002-kyc-upload-review-and-resumption",
+        "003-equity-loan-transactions-and-repayments",
+        "004-payment-provider-webhook-and-idempotency",
+        "005-agreements-and-document-access",
+        "006-api-resources-policies-and-rbac"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "008-notification-delivery-and-audit-events",
+      "description": "Persist audit events and deliver notifications for material workflow transitions.",
+      "reason": "Notification and audit tables exist without completed delivery and event behavior.",
+      "requirements": "Addresses assessment gaps: notification delivery and audit events. Connect KYC decisions, investment/loan lifecycle changes, payment outcomes, repayment events, agreement actions, and relevant administrative operations to durable audit records and user/staff notifications. Ensure recipients and payloads respect authorization and privacy, delivery failures can be retried or inspected, and event recording remains reliable when a surrounding business transaction rolls back or succeeds.",
+      "dependencies": [
+        "002-kyc-upload-review-and-resumption",
+        "003-equity-loan-transactions-and-repayments",
+        "004-payment-provider-webhook-and-idempotency",
+        "005-agreements-and-document-access",
+        "006-api-resources-policies-and-rbac"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "009-comprehensive-feature-tests",
+      "description": "Add comprehensive feature tests for the completed investor, payment, document, and staff workflows.",
+      "reason": "The current suite contains only seven tests and does not provide the requested coverage of the application’s end-to-end business requirements.",
+      "requirements": "Addresses assessment gap: comprehensive feature tests. Extend the existing PHPUnit/Laravel feature-test structure; do not rewrite tests for unaffected completed foundations. Cover valid and invalid KYC uploads, review permissions and resumption; concurrent/duplicate equity and loan operations, precise amounts, and repayment persistence; payment verification, retries, replay/idempotency and failure paths; agreement/document ownership; API resource and role/policy enforcement; Filament staff permissions and actions; notification and audit persistence; and MySQL-compatible integrity behavior. Assert externally observable state and prevent double reservation, double payment application, or unauthorized access.",
+      "dependencies": [
+        "001-persistence-and-architecture-foundation",
+        "002-kyc-upload-review-and-resumption",
+        "003-equity-loan-transactions-and-repayments",
+        "004-payment-provider-webhook-and-idempotency",
+        "005-agreements-and-document-access",
+        "006-api-resources-policies-and-rbac",
+        "007-filament-resources-and-admin-workflows",
+        "008-notification-delivery-and-audit-events"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "security",
+      "id": "010-security-and-dependency-readiness",
+      "description": "Review dependency vulnerabilities and verify security controls needed for production operation.",
+      "reason": "Security and authorization are part of the requested production-readiness scope, and provider callbacks, financial actions, and private documents have high-impact trust boundaries.",
+      "requirements": "Addresses production-readiness requirements related to security. Review direct and transitive dependencies for known vulnerabilities and remediate applicable findings without broad unrelated upgrades. Verify least-privilege API and Filament authorization, secure upload and document access, webhook authenticity and replay handling, secret/configuration handling, sensitive-data logging, and audit coverage. Re-run the affected security and feature tests after fixes.",
+      "dependencies": [
+        "009-comprehensive-feature-tests"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "011-documentation-and-production-readiness",
+      "description": "Document the completed workflows and verify production operating requirements.",
+      "reason": "The assessment identifies documentation and production-readiness gaps across the new persistence, payment, notification, and administrative workflows.",
+      "requirements": "Addresses assessment gaps: documentation and production readiness. Document customer and staff workflows, API behavior, role/permission expectations, payment provider configuration and webhook operations, agreement/document access, repayment behavior, notification/audit troubleshooting, MySQL migration and integrity requirements, and recovery/retry procedures. Provide an actionable release-readiness checklist for environment configuration, secrets, storage, queue workers, scheduled work if required, database migration/backup expectations, logging/monitoring, and operational ownership. Verify the documented steps against the implemented application; do not provision cloud infrastructure or claim deployment completion.",
+      "dependencies": [
+        "009-comprehensive-feature-tests",
+        "010-security-and-dependency-readiness"
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "generateNewUnitTests": "false",
+        "passUnitTests": "true"
+      }
+    }
+  ],
+  "metadata": {
+    "planName": "laravel-production-completion",
+    "projectName": "Fadawebs Dashboard",
+    "language": "php",
+    "createdAt": "2026-10-02T00:00:00Z",
+    "version": "1.0"
+  }
+}
