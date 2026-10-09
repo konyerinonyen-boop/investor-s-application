@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Requests\Investment\StoreEquityInvestmentRequest;
 use App\Http\Requests\Investment\StoreLoanApplicationRequest;
+use App\Http\Requests\paymentMethodRequest;
 use App\Services\InvestmentService;
 use InvalidArgumentException;
 
@@ -30,6 +31,8 @@ class InvestmentController
             ], 403);
         }
     }
+
+
 
     public function loan(StoreLoanApplicationRequest $request)
     {

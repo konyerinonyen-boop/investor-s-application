@@ -19,9 +19,12 @@ class AuthController
 
         return response()->json([
             'success' => true,
-            'message' => 'Investor account created successfully.',
+            'message' =>
+                'Registration successful..You have to verify your email ',
+
             'data' => [
                 'user' => $payload['user']->load('roles'),
+                'email_verified' => $payload['email_verified'],
                 'token' => $payload['token'],
             ],
         ], 201);
@@ -66,4 +69,63 @@ class AuthController
             'message' => 'Signed out successfully.',
         ]);
     }
+
+
+public function forgotPassword(Request $request)
+{
+    $request->validate([
+        'email' => ['required', 'email'],
+        'new_password' => ['required', 'string'],
+    ]);
+
+    try {
+        $challenge = $this->authService->forgotPassword(
+            $request->email, $request->new_password
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'If an account exists with this email, a password reset code has been sent.',
+            'data' => [
+                'challenge' => $challenge,
+            ],
+        ]);
+    } catch (\Throwable $e) {
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage(),
+        ], 500);
+    }
+}
+public function verifyPasswordResetOtp(Request $request)
+{
+    $request->validate([
+        'email' => ['required', 'email'],
+        'code' => ['required', 'string'],
+        'challenge' => ['required', 'string'],
+    ]);
+
+    try {
+        $result = $this->authService->verifyPasswordResetOtp(
+            $request->email,
+            $request->code,
+            $request->challenge,
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password reset successfully.',
+            'data' => [
+                'result' => $result,
+            ],
+        ]);
+
+    } catch (\Throwable $e) {
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage(),
+        ], 422);
+    }
+}
+
 }

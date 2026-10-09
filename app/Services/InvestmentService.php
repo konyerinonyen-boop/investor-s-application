@@ -7,6 +7,8 @@ use App\Models\Loan;
 use App\Models\User;
 use App\Repositories\EquityRoundRepository;
 use App\Repositories\LoanOfferRepository;
+use Brick\Math\BigDecimal;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 class InvestmentService
@@ -17,62 +19,256 @@ class InvestmentService
     ) {
     }
 
-    public function createEquityInvestment(User $user, array $payload): EquityInvestment
-    {
+    /**
+     * Create an equity investment.
+     *
+     * IMPORTANT:
+     *
+     * This method does NOT:
+     * - create a payment
+     * - initialize Paystack
+     * - reduce available_units
+     *
+     * It only creates the investment and stores the
+     * temporary reservation in the user's session.
+     */
+    public function createEquityInvestment(
+        User $user,
+        array $payload
+    ): EquityInvestment {
         if ($user->kyc_status !== 'verified') {
-            throw new InvalidArgumentException('Complete KYC before making a transaction.');
+            throw new InvalidArgumentException(
+                'Complete KYC before making a transaction.'
+            );
         }
 
-        $round = $this->equityRoundRepository->findById((int) $payload['equity_round_id']);
+        return DB::transaction(function () use (
+            $user,
+            $payload
+        ) {
+            /*
+             * Find the equity round.
+             *
+             * We do NOT lock it here because we are not
+             * changing available_units.
+             */
+            $round = $this->equityRoundRepository->findById(
+                (int) $payload['equity_round_id']
+            );
 
-        if (! $round) {
-            throw new InvalidArgumentException('Equity round not found.');
-        }
+            if (! $round) {
+                throw new InvalidArgumentException(
+                    'Equity round not found.'
+                );
+            }
 
-        $amount = (float) $payload['amount'];
-        $units = $amount / (float) $round->price_per_unit;
+            /*
+             * Check round status.
+             */
+            if ($round->status !== 'open') {
+                throw new InvalidArgumentException(
+                    'This equity round is not currently open.'
+                );
+            }
 
-        if ($amount < (float) $round->minimum_ticket) {
-            throw new InvalidArgumentException('Investment amount is below the round minimum ticket.');
-        }
+            /*
+             * Check opening time.
+             */
+            if (
+                $round->opens_at &&
+                now()->lt($round->opens_at)
+            ) {
+                throw new InvalidArgumentException(
+                    'This equity round has not opened yet.'
+                );
+            }
 
-        if ($round->maximum_ticket && $amount > (float) $round->maximum_ticket) {
-            throw new InvalidArgumentException('Investment amount exceeds the round maximum ticket.');
-        }
+            /*
+             * Check closing time.
+             */
+            if (
+                $round->closes_at &&
+                now()->gt($round->closes_at)
+            ) {
+                throw new InvalidArgumentException(
+                    'This equity round has already closed.'
+                );
+            }
 
-        $this->equityRoundRepository->reserveUnits($round, $units);
+            /*
+             * Convert amount to BigDecimal.
+             */
+            $amount = BigDecimal::of(
+                (string) $payload['amount']
+            );
 
-        return EquityInvestment::create([
-            'investor_id' => $user->id,
-            'equity_round_id' => $round->id,
-            'amount' => $amount,
-            'units' => $units,
-            'status' => 'pending',
-            'payment_reference' => null,
-            'agreement_id' => null,
-        ]);
+            /*
+             * Minimum ticket.
+             */
+            $minimumTicket = BigDecimal::of(
+                (string) $round->minimum_ticket
+            );
+
+            if ($amount->isLessThan($minimumTicket)) {
+                throw new InvalidArgumentException(
+                    'Investment amount is below the round minimum ticket.'
+                );
+            }
+
+            /*
+             * Maximum ticket.
+             */
+            if (
+                $round->maximum_ticket !== null &&
+                $amount->isGreaterThan(
+                    BigDecimal::of(
+                        (string) $round->maximum_ticket
+                    )
+                )
+            ) {
+                throw new InvalidArgumentException(
+                    'Investment amount exceeds the round maximum ticket.'
+                );
+            }
+
+            /*
+             * Price per unit.
+             */
+            $pricePerUnit = BigDecimal::of(
+                (string) $round->price_per_unit
+            );
+
+            if ($pricePerUnit->isNegativeOrZero()) {
+                throw new InvalidArgumentException(
+                    'The equity round has an invalid unit price.'
+                );
+            }
+
+            /*
+             * Calculate units.
+             *
+             * Example:
+             *
+             * amount = 10,000
+             * price  = 100
+             *
+             * units = 100
+             */
+            $units = $amount
+                ->dividedBy($pricePerUnit, 6)
+                ->toScale(6);
+
+            if ($units->isNegativeOrZero()) {
+                throw new InvalidArgumentException(
+                    'The calculated investment units must be greater than zero.'
+                );
+            }
+
+            /*
+             * We are NOT deducting available_units here.
+             *
+             * We only make sure that the round currently
+             * has enough units.
+             */
+            $availableUnits = BigDecimal::of(
+                (string) $round->available_units
+            );
+
+            if ($units->isGreaterThan($availableUnits)) {
+                throw new InvalidArgumentException(
+                    'There are not enough units available for this investment.'
+                );
+            }
+
+            /*
+             * Create the investment.
+             *
+             * It remains pending until payment succeeds.
+             */
+           $investment = EquityInvestment::firstOrCreate(
+                [
+                    'investor_id' => $user->id,
+                    'equity_round_id' => $round->id,
+                ],
+                [
+                    'amount' => $amount->toScale(2)->__toString(),
+                    'units' => $units->__toString(),
+                    'status' => 'pending_payment',
+                    'payment_reference' => null,
+                    'agreement_id' => null,
+                ]
+            );
+
+            /*
+             * Store temporary reservation in the session.
+             *
+             * IMPORTANT:
+             *
+             * This does NOT change equity_rounds.available_units.
+             */
+            session()->put(
+                "investment_reservation.{$investment->id}",
+                [
+                    'investment_id' => $investment->id,
+                    'equity_round_id' => $round->id,
+                    'user_id' => $user->id,
+                    'amount' => $amount
+                        ->toScale(2)
+                        ->__toString(),
+                    'units' => $units->__toString(),
+
+                    /*
+                     * 30-minute temporary checkout window.
+                     */
+                    'expires_at' => now()
+                        ->addMinutes(30)
+                        ->toIso8601String(),
+                ]
+            );
+       
+
+            return $investment;
+        });
     }
 
-    public function createLoanApplication(User $user, array $payload): Loan
-    {
+    /**
+     * Existing loan application.
+     */
+    public function createLoanApplication(
+        User $user,
+        array $payload
+    ): Loan {
         if ($user->kyc_status !== 'verified') {
-            throw new InvalidArgumentException('Complete KYC before making a transaction.');
+            throw new InvalidArgumentException(
+                'Complete KYC before making a transaction.'
+            );
         }
 
-        $offer = $this->loanOfferRepository->findById((int) $payload['loan_offer_id']);
+        $offer = $this->loanOfferRepository->findById(
+            (int) $payload['loan_offer_id']
+        );
 
         if (! $offer) {
-            throw new InvalidArgumentException('Loan offer not found.');
+            throw new InvalidArgumentException(
+                'Loan offer not found.'
+            );
         }
 
         $principal = (float) $payload['principal_amount'];
 
         if ($principal < (float) $offer->minimum_amount) {
-            throw new InvalidArgumentException('Principal amount is below the minimum allowed for this loan offer.');
+            throw new InvalidArgumentException(
+                'Principal amount is below the minimum allowed for this loan offer.'
+            );
         }
 
-        if ($offer->maximum_amount && $principal > (float) $offer->maximum_amount) {
-            throw new InvalidArgumentException('Principal amount exceeds the maximum allowed for this loan offer.');
+        if (
+            $offer->maximum_amount &&
+            $principal > (float) $offer->maximum_amount
+        ) {
+            throw new InvalidArgumentException(
+                'Principal amount exceeds the maximum allowed for this loan offer.'
+            );
         }
 
         return Loan::create([

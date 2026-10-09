@@ -13,13 +13,13 @@ class KycController
     {
     }
 
-    public function start(StartKycRequest $request)
+    public function update(SubmitKycRequest $request)
     {
-        $payload = $this->kycService->start($request->user());
+        $payload = $this->kycService->update($request->user(), $request->validated());
 
         return response()->json([
             'success' => true,
-            'message' => 'KYC workflow started.',
+            'message' => 'KYC Updated',
             'data' => $payload['profile'],
         ]);
     }

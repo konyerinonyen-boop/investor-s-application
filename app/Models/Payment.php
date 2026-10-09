@@ -15,17 +15,24 @@ class Payment extends Model
         'currency',
         'provider',
         'provider_reference',
+        'checkout_expires_at',
         'status',
         'payload',
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
+        'checkout_expires_at' => 'datetime',
         'payload' => 'array',
     ];
 
     public function user(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class, 'user_id');
     }
+
+    public function investment(): BelongsTo
+{
+    return $this->belongsTo(EquityInvestment::class, 'investment_id');
+}
 }

@@ -27,6 +27,8 @@ class EquityRound extends Model
         'price_per_unit' => 'decimal:2',
         'minimum_ticket' => 'decimal:2',
         'maximum_ticket' => 'decimal:2',
+        'total_units' => 'decimal:6',
+        'available_units' => 'decimal:6',
         'opens_at' => 'datetime',
         'closes_at' => 'datetime',
     ];
@@ -41,8 +43,8 @@ class EquityRound extends Model
         return $this->hasMany(EquityInvestment::class);
     }
 
-    public function getRemainingUnitsAttribute(): int
+    public function getRemainingUnitsAttribute(): string
     {
-        return (int) $this->available_units;
+        return (string) $this->available_units;
     }
 }

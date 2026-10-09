@@ -2,8 +2,12 @@
 
 namespace App\Models;
 
+use App\Models\EquityRound;
+use App\Models\Payment;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class EquityInvestment extends Model
 {
@@ -31,4 +35,10 @@ class EquityInvestment extends Model
     {
         return $this->belongsTo(EquityRound::class, 'equity_round_id');
     }
+
+        public function payments(): HasMany
+    {
+        return $this->hasMany(Payment::class, 'investment_id');
+    }
+
 }

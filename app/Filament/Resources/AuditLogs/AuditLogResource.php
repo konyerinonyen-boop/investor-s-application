@@ -45,12 +45,12 @@ class AuditLogResource extends AdminResource
 
     public static function canDelete(Model $record): bool
     {
-        return false;
+        return true;
     }
 
     public static function canDeleteAny(): bool
     {
-        return false;
+        return true;
     }
 
     public static function form(Schema $schema): Schema
@@ -66,7 +66,8 @@ class AuditLogResource extends AdminResource
         return $table
             ->columns([
                 TextColumn::make('created_at')->dateTime()->sortable(),
-                TextColumn::make('user.name')->label('Actor')->placeholder('System')->searchable(),
+                TextColumn::make('user.first_name')->label('Actor')->placeholder('System')->searchable(),
+                TextColumn::make('user.first_last')->label('Actor')->placeholder('System')->searchable(),
                 TextColumn::make('action')->badge()->searchable(),
                 TextColumn::make('model')->searchable(),
                 TextColumn::make('record_id')->label('Record'),

@@ -131,6 +131,10 @@ return [
     |
     */
 
-    'serializable_classes' => false,
+    'serializable_classes' => [
+        \App\OtpActions\PasswordResetAction::class,
+         \Illuminate\Notifications\AnonymousNotifiable::class,
+        \Illuminate\Support\Carbon::class,
+    ],
 
 ];

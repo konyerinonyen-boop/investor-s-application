@@ -35,4 +35,11 @@ return [
         ],
     ],
 
+    'paystack' => [
+    'secret_key' => env('PAYSTACK_SECRET_KEY'),
+],
+
+ 'korapay' => [
+    'secret_key' => env('KORAPAY_SECRET_KEY'),
+ ]
 ];

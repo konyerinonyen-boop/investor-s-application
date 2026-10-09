@@ -6,6 +6,10 @@ use App\Filament\Resources\Documents\Pages\ManageDocuments;
 use App\Filament\Support\AdminResource;
 use App\Models\Document;
 use BackedEnum;
+use Filament\Infolists\Components\ImageEntry;
+use Filament\Infolists\Components\TextEntry;
+use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
@@ -45,10 +49,10 @@ class DocumentResource extends AdminResource
 
     public static function form(Schema $schema): Schema
     {
-        return $schema
-            ->components([
-                //
-            ]);
+      
+    return $schema
+        ->components([
+        ]);
     }
 
     public static function table(Table $table): Table
