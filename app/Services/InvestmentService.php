@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\EquityInvestment;
 use App\Models\Loan;
+use App\Models\LoanOffer;
 use App\Models\User;
 use App\Repositories\EquityRoundRepository;
 use App\Repositories\LoanOfferRepository;
@@ -234,6 +235,10 @@ class InvestmentService
     /**
      * Existing loan application.
      */
+ 
+/**
+ * Create a loan application after validating the loan offer.
+ */
     public function createLoanApplication(
         User $user,
         array $payload
@@ -244,44 +249,100 @@ class InvestmentService
             );
         }
 
-        $offer = $this->loanOfferRepository->findById(
-            (int) $payload['loan_offer_id']
-        );
+        return DB::transaction(function () use ($user, $payload) {
+            /*
+            * Lock the offer while checking its status and dates.
+            * This prevents conflicting changes during this transaction.
+            */
+            $offer = LoanOffer::query()
+                ->lockForUpdate()
+                ->find((int) $payload['loan_offer_id']);
 
-        if (! $offer) {
-            throw new InvalidArgumentException(
-                'Loan offer not found.'
+            if (! $offer) {
+                throw new InvalidArgumentException(
+                    'Loan offer not found.'
+                );
+            }
+
+            if ($offer->status !== 'open') {
+                throw new InvalidArgumentException(
+                    'This loan offer is not currently open.'
+                );
+            }
+
+            if (
+                $offer->opened_at !== null &&
+                now()->lt($offer->opened_at)
+            ) {
+                throw new InvalidArgumentException(
+                    'This loan offer has not opened yet.'
+                );
+            }
+
+            if (
+                $offer->closed_at !== null &&
+                now()->gt($offer->closed_at)
+            ) {
+                throw new InvalidArgumentException(
+                    'This loan offer has already closed.'
+                );
+            }
+
+            /*
+            * Use BigDecimal instead of float for money.
+            */
+            $principal = BigDecimal::of(
+                (string) $payload['principal_amount']
             );
-        }
 
-        $principal = (float) $payload['principal_amount'];
-
-        if ($principal < (float) $offer->minimum_amount) {
-            throw new InvalidArgumentException(
-                'Principal amount is below the minimum allowed for this loan offer.'
+            $minimum = BigDecimal::of(
+                (string) $offer->minimum_amount
             );
-        }
 
-        if (
-            $offer->maximum_amount &&
-            $principal > (float) $offer->maximum_amount
-        ) {
-            throw new InvalidArgumentException(
-                'Principal amount exceeds the maximum allowed for this loan offer.'
-            );
-        }
+            if ($principal->isNegativeOrZero()) {
+                throw new InvalidArgumentException(
+                    'Principal amount must be greater than zero.'
+                );
+            }
 
-        return Loan::create([
-            'loan_offer_id' => $offer->id,
-            'investor_id' => $user->id,
-            'principal_amount' => $principal,
-            'interest_rate' => $offer->interest_rate,
-            'term_months' => $offer->term_months,
-            'status' => 'pending_funding',
-            'funded_at' => null,
-            'maturity_date' => null,
-            'agreement_id' => null,
-            'payment_reference' => null,
-        ]);
+            if ($principal->isLessThan($minimum)) {
+                throw new InvalidArgumentException(
+                    'Principal amount is below the minimum allowed for this loan offer.'
+                );
+            }
+
+            if ($offer->maximum_amount !== null) {
+                $maximum = BigDecimal::of(
+                    (string) $offer->maximum_amount
+                );
+
+                if ($maximum->isGreaterThanOrEqualTo($minimum)
+                    && $principal->isGreaterThan($maximum)) {
+                    throw new InvalidArgumentException(
+                        'Principal amount exceeds the maximum allowed for this loan offer.'
+                    );
+                }
+            }
+
+            /*
+            * Save the application.
+            * Approval and disbursement are separate stages.
+            */
+            return Loan::create([
+                'loan_offer_id' => $offer->id,
+                'investor_id' => $user->id,
+                'principal_amount' => $principal
+                    ->toScale(2)
+                    ->__toString(),
+                'interest_rate' => $offer->interest_rate,
+                'term_months' => $offer->term_months,
+                'status' => 'pending_funding',
+                'funded_at' => null,
+                'maturity_date' => null,
+                'agreement_id' => null,
+                'payment_reference' => null,
+            ]);
+        });
     }
+
 }

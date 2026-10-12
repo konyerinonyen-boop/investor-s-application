@@ -4,11 +4,15 @@ namespace App\Http\Controllers;
 
 use App\Factories\PaymentGatwayFactory;
 use App\Http\Controllers\Controller;
-
 use App\Http\Requests\paymentMethodRequest;
+use App\Models\EquityInvestment;
 use App\Models\Payment;
 use App\Services\PaymentService;
-use App\Trait\Api\V1\UserTrait;
+use App\Models\Loan;
+use App\Services\InvestmentPaymentService;
+use App\Services\LoanPaymentService;
+use Illuminate\Validation\Rule;
+use Throwable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -17,21 +21,23 @@ use RuntimeException;
 
 class PaymentController extends Controller
 {
-    public function __construct( protected PaymentService $paymentService, private PaymentGatwayFactory $factory )
+    public function __construct( 
+        protected PaymentService $paymentService,
+        protected LoanPaymentService $loanPaymentService,
+        protected InvestmentPaymentService $investmentPaymentService
+
+     )
     {
         
     }
-        public function initializeInvestmentPayment( paymentMethodRequest $request)
+        public function initializeInvestmentPayment(
+            EquityInvestment $equity,
+            paymentMethodRequest $request
+            )
     {
-       $user = auth()->user();
-        $request = $request->validated();
-        
-       $investment = $user->investments()
-        ->findOrFail($request['investment_id']);
-        
-
+                    
         try {
-            $payment = $this->paymentService->initializeInvestmentPayment($investment, $request['method']);
+            $payment = $this->investmentPaymentService->initializeInvestmentPayment($equity, $request['method']);
 
             return response()->json([
                 'success' => true,
@@ -46,6 +52,39 @@ class PaymentController extends Controller
         }
     }
 
+        public function fundLoan(
+            paymentMethodRequest $request,
+            Loan $loan,
+        ) {
+            $validated = $request->validated();
+
+            try {
+                $result = $this->loanPaymentService->initializeLoanFundingPayment(
+                    $loan,
+                    $validated['method']
+                );
+
+                return response()->json([
+                    'message' => 'Loan funding payment initialized successfully.',
+                    'data' => [
+                        'payment' => $result['payment'],
+                        'gateway' => $result['gateway'],
+                    ],
+                ], 201);
+
+            } catch (InvalidArgumentException $exception) {
+                return response()->json([
+                    'message' => $exception->getMessage(),
+                ], 422);
+
+            } catch (Throwable $exception) {
+                report($exception);
+
+                return response()->json([
+                    'message' => 'Unable to initialize the loan funding payment.',
+                ], 500);
+            }
+        }
 
 public function verifyPayment(
     Request $request,

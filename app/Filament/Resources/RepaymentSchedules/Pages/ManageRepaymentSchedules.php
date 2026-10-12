@@ -10,10 +10,5 @@ class ManageRepaymentSchedules extends ManageRecords
 {
     protected static string $resource = RepaymentScheduleResource::class;
 
-    protected function getHeaderActions(): array
-    {
-        return [
-            CreateAction::make(),
-        ];
-    }
+   
 }

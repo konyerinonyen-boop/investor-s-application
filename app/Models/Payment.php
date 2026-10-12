@@ -11,6 +11,7 @@ class Payment extends Model
         'user_id',
         'investment_id',
         'loan_id',
+        'repayment_schedule_id',
         'amount',
         'currency',
         'provider',
@@ -32,7 +33,23 @@ class Payment extends Model
     }
 
     public function investment(): BelongsTo
-{
-    return $this->belongsTo(EquityInvestment::class, 'investment_id');
-}
+    {
+        return $this->belongsTo(
+            EquityInvestment::class,
+            'investment_id'
+        );
+    }
+
+    public function loan(): BelongsTo
+    {
+        return $this->belongsTo(Loan::class, 'loan_id');
+    }
+
+    public function repaymentSchedule(): BelongsTo
+    {
+        return $this->belongsTo(
+            RepaymentSchedule::class,
+            'repayment_schedule_id'
+        );
+    }
 }

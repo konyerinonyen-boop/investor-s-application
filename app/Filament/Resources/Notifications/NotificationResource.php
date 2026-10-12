@@ -35,7 +35,7 @@ class NotificationResource extends AdminResource
     {
         return $schema
             ->components([
-                Select::make('user_id')->relationship('user', 'name')->searchable()->preload()->required(),
+                Select::make('user_id')->relationship('user', 'first_name')->searchable()->preload()->required(),
                 TextInput::make('title')->required()->maxLength(255),
                 Textarea::make('message')->required()->rows(4)->columnSpanFull(),
                 Select::make('type')->options(['info' => 'Info', 'success' => 'Success', 'warning' => 'Warning', 'error' => 'Error'])->required(),
@@ -47,7 +47,12 @@ class NotificationResource extends AdminResource
     {
         return $table
             ->columns([
-                TextColumn::make('user.name')->label('Recipient')->searchable()->sortable(),
+                 TextColumn::make('full_name')
+                        ->weight('bold')
+                        ->state(fn (Notification $record): string => trim(
+                            ($record->user?->first_name ?? '') . ' ' .
+                            ($record->investor?->last_name ?? '')
+                                ))->label('Recipient')->searchable()->sortable(),
                 TextColumn::make('title')->searchable()->limit(60),
                 TextColumn::make('type')->badge(),
                 IconColumn::make('is_read')->boolean()->label('Read'),

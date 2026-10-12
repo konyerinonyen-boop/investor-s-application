@@ -24,7 +24,6 @@ class paymentMethodRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'investment_id'      => 'required',
             'method'      => 'required|string',
             'proof_image' => 'sometimes|nullable|image|max:2048',
         ];

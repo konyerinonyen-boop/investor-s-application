@@ -2,13 +2,16 @@
 
 namespace App\Services;
 
+use App\Actions\GenerateRepaymentSchedule;
 use App\Factories\PaymentGatwayFactory;
 use App\Models\EquityInvestment;
+use App\Models\Loan;
 use App\Models\Payment;
 use Brick\Math\BigDecimal;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -17,150 +20,6 @@ class PaymentService
     public function __construct(
         protected PaymentGatwayFactory $factory
     ) {
-    }
-
-    /**
-     * Initialize payment for an existing investment.
-     *
-     * The investment must already exist.
-     */
-
-    public function initializeInvestmentPayment(
-        EquityInvestment $investment,
-        string $method
-    ): array {
-        if (
-            ! auth()->check() ||
-            (int) $investment->investor_id !== (int) auth()->id()
-        ) {
-            throw new InvalidArgumentException(
-                'You cannot make payment for this investment.'
-            );
-        }
-
-        if (! in_array($method, ['paystack', 'manual'], true)){
-            throw new InvalidArgumentException(
-                'The selected payment method is not supported.'
-            );
-        }
-
-        /*
-        * Check for an existing pending payment BEFORE opening
-        * a database transaction. Never call Paystack while
-        * holding database locks.
-        */
-        $existingPayment = Payment::query()
-            ->where('investment_id', $investment->id)
-            ->where('provider', $method)
-            ->where('status', 'pending')
-            ->latest('id')
-            ->first();
-
-        if ($existingPayment) {
-            if ($method !== 'paystack') {
-                throw new InvalidArgumentException(
-                    'The previous payment must be checked before retrying.'
-                );
-            }
-
-            // Check the actual transaction status with Paystack.
-            $verification = $this->verifyPayment($existingPayment);
-
-            if ($verification instanceof \Illuminate\Http\Client\Response) {
-                $verification = $verification->json();
-            }
-
-            $providerStatus =
-                data_get($verification, 'data.status')
-                ?? data_get($verification, 'data.data.status');
-
-            if ($providerStatus === 'success') {
-                throw new InvalidArgumentException(
-                    'The previous payment succeeded. Do not retry it.'
-                );
-            }
-
-            if (! in_array($providerStatus, ['abandoned', 'failed'], true)) {
-                throw new InvalidArgumentException(
-                    'The previous payment is not confirmed as unsuccessful. Verify it before retrying.'
-                );
-            }
-
-            // Allow a retry by closing the old unsuccessful attempt.
-            $existingPayment->update([
-                'status' => $providerStatus,
-            ]);
-
-        }
-
-        /*
-        * Lock the investment and create a fresh payment record.
-        */
-        $payment = DB::transaction(function () use (
-            $investment,
-            $method
-        ) {
-            $lockedInvestment = EquityInvestment::query()
-                ->whereKey($investment->id)
-                ->lockForUpdate()
-                ->firstOrFail();
-
-            if ($lockedInvestment->status !== 'pending_payment') {
-                throw new InvalidArgumentException(
-                    'This investment is no longer awaiting payment.'
-                );
-            }
-
-            /*
-            * Recheck to reduce duplicate payment creation during
-            * concurrent requests.
-            */
-            $pendingPayment = Payment::query()
-                ->where('investment_id', $lockedInvestment->id)
-                ->where('provider', $method)
-                ->where('status', 'pending')
-                ->lockForUpdate()
-                ->first();
-
-            if ($pendingPayment) {
-                throw new InvalidArgumentException(
-                    'A pending payment already exists. Verify it before retrying.'
-                );
-            }
-
-            return Payment::create([
-                'user_id' => $lockedInvestment->investor_id,
-                'investment_id' => $lockedInvestment->id,
-                'loan_id' => null,
-                'amount' => $lockedInvestment->amount,
-
-                // Use NGN only if the investment amount is denominated in naira.
-                'currency' => 'NGN',
-
-                'provider' => $method,
-                'provider_reference' => null,
-                'status' => 'pending',
-                'payload' => null,
-            ]);
-        });
-
-        try {
-            $result = $this->initializeProviderPayment(
-                $payment,
-                $method
-            );
-
-            return [
-                'payment' => $payment->fresh(),
-                'gateway' => $result,
-            ];
-        } catch (\Throwable $exception) {
-            $payment->update([
-                'status' => 'failed',
-            ]);
-
-            throw $exception;
-        }
     }
 
     /**
@@ -476,6 +335,139 @@ class PaymentService
                 return;
             }
 
+                        
+          
+            /*
+             * Handle incoming loan funding.
+             * The investor pays the application.
+             */
+            if (
+                $payment->loan_id !== null &&
+                $payment->investment_id === null
+            ) {
+                $loan = Loan::query()
+                    ->whereKey($payment->loan_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $loan) {
+                    throw new RuntimeException(
+                        'Loan associated with this payment was not found.'
+                    );
+                }
+
+                if ((int) $loan->investor_id !== (int) $payment->user_id) {
+                    throw new RuntimeException(
+                        'The payment user does not match the loan investor.'
+                    );
+                }
+
+                /*
+                 * If already funded, ensure this payment belongs
+                 * to that funding before doing anything else.
+                 */
+                if ($loan->funded_at !== null) {
+                    if (
+                        $loan->payment_reference !==
+                        $payment->provider_reference
+                    ) {
+                        $payment->update([
+                            'status' => 'successful',
+                            'payload' => $data,
+                        ]);
+
+                        Log::critical(
+                            'PAYSTACK WEBHOOK: Loan already funded by another payment. Reconciliation required.',
+                            [
+                                'webhook_id' => $webhookId,
+                                'payment_id' => $payment->id,
+                                'loan_id' => $loan->id,
+                                'reference' => $reference,
+                                'existing_reference' => $loan->payment_reference,
+                            ]
+                        );
+
+                        return;
+                    }
+
+                    // Same funding payment: safely ensure schedules exist.
+                    $payment->update([
+                        'status' => 'successful',
+                        'payload' => $data,
+                    ]);
+
+                    app(GenerateRepaymentSchedule::class)->handle($loan);
+
+                    return;
+                }
+
+                /*
+                 * A loan must be approved before it can be funded.
+                 * The provider has received the money, so preserve
+                 * the successful payment and flag invalid loan state.
+                 */
+                if ($loan->status !== 'approved') {
+                    $payment->update([
+                        'status' => 'successful',
+                        'payload' => $data,
+                    ]);
+
+                    Log::critical(
+                        'PAYSTACK WEBHOOK: Payment succeeded but loan is not approved. Reconciliation required.',
+                        [
+                            'webhook_id' => $webhookId,
+                            'payment_id' => $payment->id,
+                            'loan_id' => $loan->id,
+                            'loan_status' => $loan->status,
+                            'reference' => $reference,
+                        ]
+                    );
+
+                    return;
+                }
+
+                /*
+                 * 1. Record the successful payment.
+                 */
+                $payment->update([
+                    'status' => 'successful',
+                    'payload' => $data,
+                ]);
+
+                /*
+                 * 2. Mark the loan as funded.
+                 */
+                $loan->update([
+                    'status' => 'funded',
+                    'funded_at' => now(),
+                    'payment_reference' => $payment->provider_reference,
+                ]);
+
+                /*
+                 * 3. Generate the repayment plan only after funding.
+                 * This runs inside the same database transaction.
+                 */
+                $schedules = app(
+                    GenerateRepaymentSchedule::class
+                )->handle($loan->fresh());
+
+                Log::info(
+                    'PAYSTACK WEBHOOK: Loan funding and repayment schedule successful',
+                    [
+                        'webhook_id' => $webhookId,
+                        'payment_id' => $payment->id,
+                        'loan_id' => $loan->id,
+                        'investor_id' => $loan->investor_id,
+                        'reference' => $reference,
+                        'installments_created_or_found' => $schedules->count(),
+                    ]
+                );
+
+                return;
+            }
+
+
+                
             /*
             * 9. Load and lock the investment.
             */

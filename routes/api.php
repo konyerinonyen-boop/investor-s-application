@@ -63,9 +63,10 @@ Route::post(
         Route::post('/kyc/update', [KycController::class, 'update'])->middleware('kyc_verified');
         Route::post('/kyc/submit', [KycController::class, 'submit'])->middleware('kyc_verified');
         Route::post('/investments/equity', [InvestmentController::class, 'equity']);
-        Route::post('/investments/payment', [PaymentController::class, 'initializeInvestmentPayment']);
+        Route::post('/investments/{equity}/payment', [PaymentController::class, 'initializeInvestmentPayment']);
         Route::post('/payments/{payment}/verify', [PaymentController::class, 'verifyPayment']);
         Route::post('/loans/apply', [InvestmentController::class, 'loan']);
+         Route::post('/loans/{loan}/payment', [PaymentController::class, 'fundLoan']);
         Route::get('/portfolio', [PortfolioController::class, 'summary']);
       
 

@@ -2,8 +2,11 @@
 
 namespace App\Models;
 
+use App\Models\Loan;
+use App\Models\Payment;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class RepaymentSchedule extends Model
 {
@@ -31,4 +34,12 @@ class RepaymentSchedule extends Model
     {
         return $this->belongsTo(Loan::class);
     }
+
+    public function payment(): HasOne
+{
+    return $this->hasOne(
+        Payment::class,
+        'repayment_schedule_id'
+    );
+}
 }

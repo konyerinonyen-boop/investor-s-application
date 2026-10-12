@@ -65,7 +65,7 @@ public static function infolist(Schema $schema): Schema
                     Grid::make(2)
                         ->schema([
                             TextEntry::make('full_name')
-                                ->label('Full Name')
+                                ->label('Investor')
                                 ->weight('bold')
                                 ->state(fn (EquityInvestment $record): string => trim(
                                     ($record->investor?->first_name ?? '') . ' ' .
@@ -166,7 +166,7 @@ public static function table(Table $table): Table
         ->defaultSort('created_at', 'desc')
         ->columns([
                    TextColumn::make('full_name')
-                                ->label('Full Name')
+                                ->label('Investor')
                                 ->weight('bold')
                                 ->state(fn (EquityInvestment $record): string => trim(
                                     ($record->investor?->first_name ?? '') . ' ' .
