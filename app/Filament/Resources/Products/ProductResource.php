@@ -90,9 +90,10 @@ class ProductResource extends AdminResource
                         Select::make('instrument_type')
                             ->label('Investment type')
                             ->options([
-                                'equity' => 'Equity investment',
-                                'loan' => 'Loan investment',
-                            ])
+                            'equity' => 'Investment only',
+                            'loan' => 'Loan only',
+                            'both' => 'Investment and loan',
+                        ])
                             ->native(false)
                             ->required()
                             ->live()
@@ -207,16 +208,19 @@ class ProductResource extends AdminResource
                     })
                     ->sortable(),
 
-                TextColumn::make('status')
-                    ->label('Status')
-                    ->badge()
-                    ->formatStateUsing(
-                        fn (?string $state): string => str($state ?? 'unknown')
-                            ->replace('_', ' ')
+                TextColumn::make('instrument_type')
+                ->label('Product type')
+                ->badge()
+                ->formatStateUsing(
+                    fn (?string $state): string => match ($state) {
+                        'equity' => 'Investment only',
+                        'loan' => 'Loan only',
+                        'both' => 'Investment and loan',
+                        default => str($state ?? 'unknown')
                             ->title()
-                            ->toString()
-                    )
-                    ->color(fn (?string $state): string => match ($state) {
+                            ->toString(),
+                    }
+                )->color(fn (?string $state): string => match ($state) {
                         'active' => 'success',
                         'draft' => 'gray',
                         'paused' => 'warning',
@@ -248,13 +252,33 @@ class ProductResource extends AdminResource
                     ->visible(fn (): bool => true)
                     ->toggleable(),
 
-                TextColumn::make('equity_rounds_count')
-                    ->label('Equity rounds')
-                    ->counts('equityRounds')
-                    ->badge()
-                    ->color('info')
-                    ->sortable(),
+   TextColumn::make('loan_offers_count')
+    ->label('Loan offers')
+    ->counts('loanOffers')
+    ->badge()
+    ->color('warning')
+    ->sortable()
+    ->formatStateUsing(
+        fn ($state, $record) => in_array(
+            $record->instrument_type,
+            ['loan', 'both'],
+            true
+        ) ? $state : '—'
+    ),
 
+TextColumn::make('equity_rounds_count')
+    ->label('Equity rounds')
+    ->counts('equityRounds')
+    ->badge()
+    ->color('success')
+    ->sortable()
+    ->formatStateUsing(
+        fn ($state, $record) => in_array(
+            $record->instrument_type,
+            ['equity', 'both'],
+            true
+        ) ? $state : '—'
+    ),
                 TextColumn::make('loan_offers_count')
                     ->label('Loan offers')
                     ->counts('loanOffers')
@@ -292,6 +316,7 @@ class ProductResource extends AdminResource
                         'closed' => 'Closed',
                     ]),
             ])
+            
             ->recordActions([
                 ViewAction::make()
                     ->url(fn (Product $record): string => static::getUrl(

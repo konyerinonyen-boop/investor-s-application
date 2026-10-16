@@ -43,6 +43,7 @@ class InvestmentService
             );
         }
 
+        
         return DB::transaction(function () use (
             $user,
             $payload
@@ -66,6 +67,16 @@ class InvestmentService
             /*
              * Check round status.
              */
+            $product = $round->product;
+
+            if (
+                ! $product ||
+                ! in_array($product->instrument_type, ['equity', 'both'], true)
+            ) {
+                throw new InvalidArgumentException(
+                    'This product does not support equity investments.'
+                );
+            }
             if ($round->status !== 'open') {
                 throw new InvalidArgumentException(
                     'This equity round is not currently open.'
@@ -288,6 +299,19 @@ class InvestmentService
                 );
             }
 
+            
+            $offer->loadMissing('product');
+
+            $product = $offer->product;
+
+            if (
+                ! $product ||
+                ! in_array($product->instrument_type, ['loan', 'both'], true)
+            ) {
+                throw new InvalidArgumentException(
+                    'This product does not support loan applications.'
+                );
+            }
             /*
             * Use BigDecimal instead of float for money.
             */
