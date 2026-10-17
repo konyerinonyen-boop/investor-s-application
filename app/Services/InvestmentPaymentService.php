@@ -4,28 +4,19 @@ namespace App\Services;
 
 use App\Models\EquityInvestment;
 use App\Models\Payment;
+use Brick\Math\BigDecimal;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 class InvestmentPaymentService
 {
-    /**
-     * Create a new class instance.
-     */
-    public function __construct(protected PaymentService $paymentService)
-    {
-        //
+    public function __construct(
+        protected WalletService $walletService
+    ) {
     }
-    /**
-     * Initialize payment for an existing investment.
-     *
-     * The investment must already exist.
-     */
 
-   
-     public function initializeInvestmentPayment(
+    public function initializeInvestmentPayment(
         EquityInvestment $investment,
-        string $method
     ): array {
         if (
             ! auth()->check() ||
@@ -36,72 +27,20 @@ class InvestmentPaymentService
             );
         }
 
-        if (! in_array($method, ['paystack', 'manual'], true)){
-            throw new InvalidArgumentException(
-                'The selected payment method is not supported.'
-            );
-        }
-
-        /*
-        * Check for an existing pending payment BEFORE opening
-        * a database transaction. Never call Paystack while
-        * holding database locks.
-        */
-        $existingPayment = Payment::query()
-            ->where('investment_id', $investment->id)
-            ->where('provider', $method)
-            ->where('status', 'pending')
-            ->latest('id')
-            ->first();
-
-        if ($existingPayment) {
-            if ($method !== 'paystack') {
-                throw new InvalidArgumentException(
-                    'The previous payment must be checked before retrying.'
-                );
-            }
-
-            // Check the actual transaction status with Paystack.
-            $verification = $this->paymentService->verifyPayment($existingPayment);
-
-            if ($verification instanceof \Illuminate\Http\Client\Response) {
-                $verification = $verification->json();
-            }
-
-            $providerStatus =
-                data_get($verification, 'data.status')
-                ?? data_get($verification, 'data.data.status');
-
-            if ($providerStatus === 'success') {
-                throw new InvalidArgumentException(
-                    'The previous payment succeeded. Do not retry it.'
-                );
-            }
-
-            if (! in_array($providerStatus, ['abandoned', 'failed'], true)) {
-                throw new InvalidArgumentException(
-                    'The previous payment is not confirmed as unsuccessful. Verify it before retrying.'
-                );
-            }
-
-            // Allow a retry by closing the old unsuccessful attempt.
-            $existingPayment->update([
-                'status' => $providerStatus,
-            ]);
-
-        }
-
-        /*
-        * Lock the investment and create a fresh payment record.
-        */
-        $payment = DB::transaction(function () use (
-            $investment,
-            $method
-        ) {
+        return DB::transaction(function () use ($investment) {
             $lockedInvestment = EquityInvestment::query()
                 ->whereKey($investment->id)
                 ->lockForUpdate()
                 ->firstOrFail();
+
+            if (
+                (int) $lockedInvestment->investor_id !==
+                (int) auth()->id()
+            ) {
+                throw new InvalidArgumentException(
+                    'You cannot make payment for this investment.'
+                );
+            }
 
             if ($lockedInvestment->status !== 'pending_payment') {
                 throw new InvalidArgumentException(
@@ -109,55 +48,87 @@ class InvestmentPaymentService
                 );
             }
 
-            /*
-            * Recheck to reduce duplicate payment creation during
-            * concurrent requests.
-            */
-            $pendingPayment = Payment::query()
-                ->where('investment_id', $lockedInvestment->id)
-                ->where('provider', $method)
-                ->where('status', 'pending')
+            $round = $lockedInvestment->round()
                 ->lockForUpdate()
                 ->first();
 
-            if ($pendingPayment) {
+            if (! $round) {
                 throw new InvalidArgumentException(
-                    'A pending payment already exists. Verify it before retrying.'
+                    'The equity round could not be found.'
                 );
             }
 
-            return Payment::create([
+            $availableUnits = BigDecimal::of(
+                (string) $round->available_units
+            );
+
+            $requestedUnits = BigDecimal::of(
+                (string) $lockedInvestment->units
+            );
+
+            if ($requestedUnits->isGreaterThan($availableUnits)) {
+                throw new InvalidArgumentException(
+                    'There are not enough equity units available.'
+                );
+            }
+
+            $reference = 'wallet-equity-investment-'
+                . $lockedInvestment->id;
+
+            // Create the payment inside the transaction.
+            $payment = Payment::create([
                 'user_id' => $lockedInvestment->investor_id,
+                'purpose' => 'equity_investment',
                 'investment_id' => $lockedInvestment->id,
                 'loan_id' => null,
+                'repayment_schedule_id' => null,
                 'amount' => $lockedInvestment->amount,
-
-                // Use NGN only if the investment amount is denominated in naira.
                 'currency' => 'NGN',
-
-                'provider' => $method,
-                'provider_reference' => null,
+                'provider' => 'wallet',
+                'provider_reference' => $reference,
                 'status' => 'pending',
                 'payload' => null,
             ]);
-        });
 
-        try {
-            $result = $this->paymentService->initializeProviderPayment(
+            // This checks the wallet balance and deducts the money.
+            // If the balance is insufficient, the transaction rolls back.
+            $this->walletService->debit(
+                $lockedInvestment->investor,
+                (string) $lockedInvestment->amount,
+                'equity_investment',
+                'equity-investment-' . $lockedInvestment->id,
+                'Wallet payment for equity investment #'
+                    . $lockedInvestment->id,
                 $payment,
-                $method
+                [
+                    'investment_id' => $lockedInvestment->id,
+                    'payment_id' => $payment->id,
+                ]
             );
+
+            // Deduct the units from the equity round.
+            $remainingUnits = $availableUnits
+                ->minus($requestedUnits)
+                ->toScale(6);
+
+            $round->forceFill([
+                'available_units' => $remainingUnits->__toString(),
+            ])->save();
+
+            // Complete the investment and mark payment successful.
+            $lockedInvestment->update([
+                'status' => 'completed',
+                'payment_reference' => $reference,
+            ]);
+
+            $payment->update([
+                'status' => 'successful',
+            ]);
 
             return [
                 'payment' => $payment->fresh(),
-                'gateway' => $result,
+                'gateway' => null,
             ];
-        } catch (\Throwable $exception) {
-            $payment->update([
-                'status' => 'failed',
-            ]);
-
-            throw $exception;
-        }
+        }, 3);
     }
 }

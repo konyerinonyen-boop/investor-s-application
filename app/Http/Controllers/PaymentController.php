@@ -2,16 +2,14 @@
 
 namespace App\Http\Controllers;
 
-use App\Factories\PaymentGatwayFactory;
 use App\Http\Controllers\Controller;
-use App\Http\Requests\paymentMethodRequest;
 use App\Models\EquityInvestment;
 use App\Models\Payment;
 use App\Services\PaymentService;
 use App\Models\Loan;
 use App\Services\InvestmentPaymentService;
 use App\Services\LoanPaymentService;
-use Illuminate\Validation\Rule;
+use App\Services\WalletPaymentService;
 use Throwable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -30,61 +28,132 @@ class PaymentController extends Controller
     {
         
     }
-        public function initializeInvestmentPayment(
-            EquityInvestment $equity,
-            paymentMethodRequest $request
-            )
-    {
-                    
+        
+    public function initializeInvestmentPayment(
+        EquityInvestment $equity
+    ): JsonResponse {
         try {
-            $payment = $this->investmentPaymentService->initializeInvestmentPayment($equity, $request['method']);
+            $result = $this->investmentPaymentService
+                ->initializeInvestmentPayment($equity);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Payment Intialized Successfully',
-                'data' => ['investment' => $payment],
-            ], 201);
+                'message' => 'Equity investment completed successfully.',
+                'data' => $result,
+            ], 200);
+
         } catch (InvalidArgumentException $exception) {
             return response()->json([
                 'success' => false,
                 'message' => $exception->getMessage(),
-            ], 403);
+            ], 422);
+
+        } catch (\RuntimeException $exception) {
+            if ($exception->getMessage() === 'Insufficient wallet balance.') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Insufficient wallet balance.',
+                ], 422);
+            }
+
+            report($exception);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to complete the equity investment.',
+            ], 500);
+
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to complete the equity investment.',
+            ], 500);
         }
     }
 
-        public function fundLoan(
-            paymentMethodRequest $request,
-            Loan $loan,
-        ) {
-            $validated = $request->validated();
+    public function fundLoan(Loan $loan): JsonResponse
+    {
+        try {
+            $result = $this->loanPaymentService
+                ->initializeLoanFundingPayment($loan);
 
-            try {
-                $result = $this->loanPaymentService->initializeLoanFundingPayment(
-                    $loan,
-                    $validated['method']
-                );
+            return response()->json([
+                'success' => true,
+                'message' => 'Loan funded successfully.',
+                'data' => $result,
+            ], 200);
 
+        } catch (InvalidArgumentException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], 422);
+
+        } catch (\RuntimeException $exception) {
+            if ($exception->getMessage() === 'Insufficient wallet balance.') {
                 return response()->json([
-                    'message' => 'Loan funding payment initialized successfully.',
-                    'data' => [
-                        'payment' => $result['payment'],
-                        'gateway' => $result['gateway'],
-                    ],
-                ], 201);
-
-            } catch (InvalidArgumentException $exception) {
-                return response()->json([
-                    'message' => $exception->getMessage(),
+                    'success' => false,
+                    'message' => 'Insufficient wallet balance.',
                 ], 422);
-
-            } catch (Throwable $exception) {
-                report($exception);
-
-                return response()->json([
-                    'message' => 'Unable to initialize the loan funding payment.',
-                ], 500);
             }
+
+            report($exception);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to fund this loan.',
+            ], 500);
+
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to fund this loan.',
+            ], 500);
         }
+    }
+
+public function depositToWallet(
+    Request $request,
+    WalletPaymentService $walletPaymentService
+): JsonResponse {
+    $validated = $request->validate([
+        'amount' => ['required', 'numeric', 'min:100', 'decimal:0,2'],
+        'method' => ['required', 'string', 'in:paystack'],
+    ]);
+
+    try {
+        $result = $walletPaymentService->initializeDeposit(
+            $request->user(),
+            (string) $validated['amount'],
+            $validated['method']
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Wallet deposit initialized successfully.',
+            'data' => $result,
+        ], 201);
+
+    } catch (InvalidArgumentException $exception) {
+        return response()->json([
+            'success' => false,
+            'message' => $exception->getMessage(),
+        ], 422);
+
+    } catch (Throwable $exception) {
+        report($exception);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Unable to initialize wallet deposit.',
+        ], 500);
+    }
+}
+
 
 public function verifyPayment(
     Request $request,

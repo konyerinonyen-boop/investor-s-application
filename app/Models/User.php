@@ -7,6 +7,9 @@ use App\Models\Document;
 use App\Models\EquityInvestment;
 use App\Models\KycProfile;
 use App\Models\Loan;
+use App\Models\Notification;
+use App\Models\Payment;
+use App\Models\Wallet;
 use App\Notifications\VerifyEmailNotification;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Models\Contracts\HasName;
@@ -14,6 +17,7 @@ use Filament\Panel;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -95,5 +99,18 @@ public function getFullNameAttribute(): string
     public function notifications()
     {
         return $this->hasMany(Notification::class);
+    }
+
+    public function wallet(): HasOne
+    {
+        return $this->hasOne(Wallet::class);
+    }
+
+    public function walletTransactions()
+    {
+        return $this->hasManyThrough(
+            WalletTransaction::class,
+            Wallet::class
+        );
     }
 }

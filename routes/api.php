@@ -68,7 +68,10 @@ Route::post(
         Route::post('/loans/apply', [InvestmentController::class, 'loan']);
          Route::post('/loans/{loan}/payment', [PaymentController::class, 'fundLoan']);
         Route::get('/portfolio', [PortfolioController::class, 'summary']);
-      
+      Route::post('/wallet/deposit', [
+        PaymentController::class,
+        'depositToWallet',
+    ])->middleware('throttle:5,1');
 
     });
        Route::post('webhook/{provider}', [PaymentController::class, 'webhook']);

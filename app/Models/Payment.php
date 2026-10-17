@@ -9,6 +9,7 @@ class Payment extends Model
 {
     protected $fillable = [
         'user_id',
+        'purpose',
         'investment_id',
         'loan_id',
         'repayment_schedule_id',
