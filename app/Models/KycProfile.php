@@ -25,7 +25,30 @@ class KycProfile extends Model
         'reviewed_by',
         'reviewed_at',
         'submitted_ip',
+        'bank_code',
+        'account_name',
+
+        'identity_verification_status',
+        'identity_verification_reference',
+        'identity_verified_at',
+
+        'selfie_verification_status',
+        'selfie_verification_reference',
+        'selfie_verified_at',
+
+        'bank_verification_status',
+        'bank_verification_reference',
+        'bank_verified_at',
     ];
+    protected function casts(): array
+    {
+        return [
+            'identity_verified_at' => 'datetime',
+            'selfie_verified_at' => 'datetime',
+            'bank_verified_at' => 'datetime',
+            'reviewed_at' => 'datetime',
+        ];
+    }
 
     public function user(): BelongsTo
     {

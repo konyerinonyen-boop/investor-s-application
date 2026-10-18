@@ -10,36 +10,56 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('kyc_profiles', function (Blueprint $table) {
-            // Remove manual-review-only columns.
-            $table->dropColumn([
-                'reviewed_by',
-                'reviewed_at',
-            ]);
+            // Identity document verification
+            $table->string('identity_verification_status')
+                ->default('pending');
 
-            // Add fields for automated BVN/NIN verification.
-            $table->string('identity_type', 10)->nullable();
-            $table->text('identity_number')->nullable();
+            $table->string('identity_verification_reference')
+                ->nullable();
 
-            // Store the outcome of the automated verification.
-            $table->string('verification_reference')->nullable();
-            $table->timestamp('verified_at')->nullable();
+            $table->timestamp('identity_verified_at')
+                ->nullable();
+
+            // Selfie verification
+            $table->string('selfie_verification_status')
+                ->default('pending');
+
+            $table->string('selfie_verification_reference')
+                ->nullable();
+
+            $table->timestamp('selfie_verified_at')
+                ->nullable();
+
+            // Bank account verification
+            $table->string('bank_verification_status')
+                ->default('pending');
+
+            $table->string('bank_verification_reference')
+                ->nullable();
+
+            $table->timestamp('bank_verified_at')
+                ->nullable();
+
+            // Verified bank account holder's name
+            $table->string('account_name')->nullable();
         });
     }
 
     public function down(): void
     {
         Schema::table('kyc_profiles', function (Blueprint $table) {
-            // Remove the new Dojah fields.
             $table->dropColumn([
-                'identity_type',
-                'identity_number',
-                'verification_reference',
-                'verified_at',
+                'identity_verification_status',
+                'identity_verification_reference',
+                'identity_verified_at',
+                'selfie_verification_status',
+                'selfie_verification_reference',
+                'selfie_verified_at',
+                'bank_verification_status',
+                'bank_verification_reference',
+                'bank_verified_at',
+                'account_name',
             ]);
-
-            // Restore the manual-review columns.
-            $table->foreignId('reviewed_by')->nullable()->constrained('users');
-            $table->timestamp('reviewed_at')->nullable();
         });
     }
 };

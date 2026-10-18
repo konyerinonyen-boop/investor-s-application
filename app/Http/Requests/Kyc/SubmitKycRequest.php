@@ -9,28 +9,21 @@ class SubmitKycRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() !== null;
+        return true;
     }
 
     public function rules(): array
     {
         return [
-            // Investor chooses one identity verification method.
-            'identity_type' => [
-                'required',
-                Rule::in(['bvn', 'nin']),
-            ],
+            /*
+            |--------------------------------------------------------------------------
+            | Identity Document
+            |--------------------------------------------------------------------------
+            */
 
-            // Exactly 11 digits for either BVN or NIN.
-            'identity_number' => [
-                'required',
-                'string',
-                'regex:/^[0-9]{11}$/',
-            ],
-
-            // Existing identity document requirements.
             'id_document_type' => [
                 'required',
+                'string',
                 Rule::in([
                     'national_id',
                     'passport',
@@ -45,28 +38,42 @@ class SubmitKycRequest extends FormRequest
                 'max:100',
             ],
 
-            'id_document_front' => [
+            'id_document_path_front' => [
                 'required',
+                'file',
                 'image',
                 'mimes:jpg,jpeg,png,webp',
                 'max:5120',
             ],
 
-            'id_document_back' => [
+            'id_document_path_back' => [
                 'required',
+                'file',
                 'image',
                 'mimes:jpg,jpeg,png,webp',
                 'max:5120',
             ],
 
-            'selfie' => [
+            /*
+            |--------------------------------------------------------------------------
+            | Selfie
+            |--------------------------------------------------------------------------
+            */
+
+            'selfie_path' => [
                 'required',
+                'file',
                 'image',
                 'mimes:jpg,jpeg,png,webp',
                 'max:5120',
             ],
 
-            // Bank account details.
+            /*
+            |--------------------------------------------------------------------------
+            | Bank Account
+            |--------------------------------------------------------------------------
+            */
+
             'bank_name' => [
                 'required',
                 'string',
@@ -82,7 +89,8 @@ class SubmitKycRequest extends FormRequest
             'account_number' => [
                 'required',
                 'string',
-                'regex:/^[0-9]{10}$/',
+                'max:50',
+                'regex:/^[0-9]+$/',
             ],
         ];
     }
@@ -90,26 +98,62 @@ class SubmitKycRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'identity_type.required' =>
-                'Choose either BVN or NIN.',
+            'id_document_type.required' =>
+                'Please select your identity document type.',
 
-            'identity_type.in' =>
-                'Identity type must be BVN or NIN.',
+            'id_document_type.in' =>
+                'The selected identity document type is not supported.',
 
-            'identity_number.regex' =>
-                'Your BVN or NIN must contain exactly 11 digits.',
+            'id_document_number.required' =>
+                'Your identity document number is required.',
+
+            'id_document_path_front.required' =>
+                'Please upload the front of your identity document.',
+
+            'id_document_path_front.image' =>
+                'The front document must be an image.',
+
+            'id_document_path_front.mimes' =>
+                'The front document must be JPG, JPEG, PNG, or WEBP.',
+
+            'id_document_path_front.max' =>
+                'The front document cannot exceed 5MB.',
+
+            'id_document_path_back.required' =>
+                'Please upload the back of your identity document.',
+
+            'id_document_path_back.image' =>
+                'The back document must be an image.',
+
+            'id_document_path_back.mimes' =>
+                'The back document must be JPG, JPEG, PNG, or WEBP.',
+
+            'id_document_path_back.max' =>
+                'The back document cannot exceed 5MB.',
+
+            'selfie_path.required' =>
+                'Please upload your selfie.',
+
+            'selfie_path.image' =>
+                'Your selfie must be an image.',
+
+            'selfie_path.mimes' =>
+                'Your selfie must be JPG, JPEG, PNG, or WEBP.',
+
+            'selfie_path.max' =>
+                'Your selfie cannot exceed 5MB.',
+
+            'bank_name.required' =>
+                'Please select your bank.',
+
+            'bank_code.required' =>
+                'The selected bank code is required.',
+
+            'account_number.required' =>
+                'Your bank account number is required.',
 
             'account_number.regex' =>
-                'Your bank account number must contain exactly 10 digits.',
-
-            'id_document_front.required' =>
-                'Upload the front of your identity document.',
-
-            'id_document_back.required' =>
-                'Upload the back of your identity document.',
-
-            'selfie.required' =>
-                'Upload your selfie for verification.',
+                'Your account number must contain digits only.',
         ];
     }
 }

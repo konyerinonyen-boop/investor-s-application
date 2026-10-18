@@ -43,18 +43,15 @@ return [
     'secret_key' => env('KORAPAY_SECRET_KEY'),
  ],
  
-    
-    'dojah' => [
-        'base_url' => env(
-            'DOJAH_BASE_URL',
-            'https://sandbox.dojah.io'
-        ),
-        'app_id' => env('DOJAH_APP_ID'),
-        'secret_key' => env('DOJAH_SECRET_KEY'),
-        'selfie_threshold' => (int) env(
-            'DOJAH_SELFIE_THRESHOLD',
-            90
-        ),
-    ],
+   
+'bytid' => [
+    'api_key' => env('BYTID_API_KEY'),
+    'base_url' => env(
+        'BYTID_BASE_URL',
+        'https://api.bytid.com/v1'
+    ),
+    'redirect_url' => env('BYTID_REDIRECT_URL'),
+],
+
 
 ];

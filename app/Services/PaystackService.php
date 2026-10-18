@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+
 use RuntimeException;
 
 class PaystackService implements PaymantGateWayInterface
@@ -58,5 +59,51 @@ public function verify(string $reference): array
     return $result;
 }
 
+    public function resolveAccount(
+        string $accountNumber,
+        string $bankCode
+    ): array {
+        $secretKey = config('services.paystack.secret_key');
+
+        if (! $secretKey) {
+            throw new RuntimeException(
+                'Paystack secret key is not configured.'
+            );
+        }
+
+        $response = Http::withToken($secretKey)
+            ->acceptJson()
+            ->timeout(20)
+            ->get(
+                'https://api.paystack.co/bank/resolve',
+                [
+                    'account_number' => $accountNumber,
+                    'bank_code' => $bankCode,
+                ]
+            );
+
+        if (! $response->successful()) {
+            throw new RuntimeException(
+                'Paystack could not verify this bank account. Please check the details and try again.'
+            );
+        }
+
+        $result = $response->json();
+
+        if (
+            ($result['status'] ?? false) !== true ||
+            empty($result['data']['account_name'])
+        ) {
+            throw new RuntimeException(
+                'Paystack did not return a verified account name.'
+            );
+        }
+
+        return [
+            'account_name' => $result['data']['account_name'],
+            'account_number' => $result['data']['account_number']
+                ?? $accountNumber,
+        ];
+    }
 
 }
