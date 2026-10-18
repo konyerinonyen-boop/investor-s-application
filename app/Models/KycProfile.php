@@ -18,6 +18,7 @@ class KycProfile extends Model
         'id_document_path_back',
         'selfie_path',
         'bank_name',
+        'bank_code',
         'account_number',
         'trigger_source',
         'rejection_reason',

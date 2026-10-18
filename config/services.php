@@ -41,5 +41,20 @@ return [
 
  'korapay' => [
     'secret_key' => env('KORAPAY_SECRET_KEY'),
- ]
+ ],
+ 
+    
+    'dojah' => [
+        'base_url' => env(
+            'DOJAH_BASE_URL',
+            'https://sandbox.dojah.io'
+        ),
+        'app_id' => env('DOJAH_APP_ID'),
+        'secret_key' => env('DOJAH_SECRET_KEY'),
+        'selfie_threshold' => (int) env(
+            'DOJAH_SELFIE_THRESHOLD',
+            90
+        ),
+    ],
+
 ];
