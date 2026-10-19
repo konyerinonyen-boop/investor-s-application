@@ -2,12 +2,14 @@
 
 namespace App\Services;
 
+use App\Models\KycProfile;
 use App\Models\User;
 use App\Repositories\KycProfileRepository;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class KycService
 {
@@ -16,19 +18,85 @@ class KycService
     ) {
     }
 
+    /**
+     * Store the uploaded identity documents privately.
+     *
+     * Call this BEFORE contacting Bytid.
+     * The returned document fields contain file paths,
+     * not UploadedFile objects.
+     */
+    public function storeUploadedDocuments(array $data): array
+    {
+        $fileFields = [
+            'id_document_path_front' => 'kycDoc/front',
+            'id_document_path_back' => 'kycDoc/back',
+        ];
+
+        foreach ($fileFields as $field => $directory) {
+            if (! isset($data[$field])) {
+                continue;
+            }
+
+            $file = $data[$field];
+
+            // Do not store the same file twice.
+            if (! $file instanceof UploadedFile) {
+                continue;
+            }
+
+            $path = $file->storeAs(
+                $directory,
+                Str::uuid() . '.' . $file->extension(),
+                'local'
+            );
+
+            if ($path === false) {
+                throw new \RuntimeException(
+                    "Could not store the uploaded file: {$field}"
+                );
+            }
+
+            $data[$field] = $path;
+        }
+
+        return $data;
+    }
+
+    /**
+     * Save a KYC submission after the Bytid request succeeds.
+     *
+     * $bytidResult should contain:
+     * [
+     *     'reference' => '...',
+     *     'provider_result' => [...]
+     * ]
+     */
+    public function submit(
+        User $user,
+        array $data,
+        array $bytidResult
+    ): array {
+        return $this->saveSubmission(
+            $user,
+            $data,
+            $bytidResult
+        );
+    }
+
+    /**
+     * Update an existing KYC submission.
+     */
     public function update(User $user, array $data): array
     {
         return $this->saveSubmission($user, $data);
     }
 
-    public function submit(User $user, array $data): array
-    {
-        return $this->saveSubmission($user, $data);
-    }
-
-    protected function saveSubmission(User $user, array $data): array
-    {
-        // Never allow the client to choose the overall KYC status.
+    protected function saveSubmission(
+        User $user,
+        array $data,
+        ?array $bytidResult = null
+    ): array {
+        // Never allow the client to choose administrative fields.
         unset(
             $data['user_id'],
             $data['status'],
@@ -38,25 +106,41 @@ class KycService
             $data['submitted_ip']
         );
 
+        // Supports existing callers that still pass UploadedFile objects.
+        // Already-stored paths are left unchanged.
         $data = $this->storeUploadedFiles($data);
 
         $data['status'] = 'pending';
-        $data['trigger_source'] = 'user';
+        $data['trigger_source'] = 'resubmission';
         $data['submitted_ip'] = request()->ip();
         $data['rejection_reason'] = null;
 
-        // Reset verification results when a new submission is made.
-        $data['identity_verification_status'] = 'pending';
-        $data['identity_verification_reference'] = null;
-        $data['identity_verified_at'] = null;
+        // Save the reference returned by our Bytid submission method.
+        if ($bytidResult !== null) {
+            $reference = $bytidResult['reference'] ?? null;
 
+            if (! is_string($reference) || $reference === '') {
+                throw new \RuntimeException(
+                    'The Bytid document reference is missing.'
+                );
+            }
+
+            $data['identity_verification_reference'] = $reference;
+
+            // The request succeeding does not mean the document
+            // has passed all verification checks.
+            $data['identity_verification_status'] = 'pending';
+            $data['identity_verified_at'] = null;
+        } else {
+            $data['identity_verification_status'] = 'pending';
+            $data['identity_verification_reference'] = null;
+            $data['identity_verified_at'] = null;
+        }
+
+        // A new submission starts a new liveness verification flow.
         $data['selfie_verification_status'] = 'pending';
         $data['selfie_verification_reference'] = null;
         $data['selfie_verified_at'] = null;
-
-        $data['bank_verification_status'] = 'pending';
-        $data['bank_verification_reference'] = null;
-        $data['bank_verified_at'] = null;
 
         $profile = DB::transaction(function () use ($user, $data) {
             $profile = $this->kycProfileRepository
@@ -75,6 +159,9 @@ class KycService
         ];
     }
 
+    /**
+     * Store any remaining uploaded files privately.
+     */
     protected function storeUploadedFiles(array $data): array
     {
         $fileFields = [
@@ -85,51 +172,65 @@ class KycService
 
         foreach ($fileFields as $field => $directory) {
             if (
-                isset($data[$field]) &&
-                $data[$field] instanceof UploadedFile
+                ! isset($data[$field]) ||
+                ! $data[$field] instanceof UploadedFile
             ) {
-                $file = $data[$field];
+                continue;
+            }
 
-                $data[$field] = $file->storeAs(
-                    $directory,
-                    Str::uuid() . '.' . $file->extension(),
-                    'public'
+            $file = $data[$field];
+
+            $path = $file->storeAs(
+                $directory,
+                Str::uuid() . '.' . $file->extension(),
+                'local'
+            );
+
+            if ($path === false) {
+                throw new \RuntimeException(
+                    "Could not store the uploaded file: {$field}"
                 );
             }
+
+            $data[$field] = $path;
         }
 
         return $data;
     }
 
-    
     public function startBytidLiveness(
-        \App\Models\KycProfile $profile,
-        \App\Services\BytidVerificationService $bytid
+        KycProfile $profile,
+        BytidVerificationService $bytid
     ): array {
         if (
             empty($profile->id_document_path_front) ||
             empty($profile->id_document_type)
         ) {
-            throw \Illuminate\Validation\ValidationException::withMessages([
+            throw ValidationException::withMessages([
                 'kyc' => 'Submit your identity document before starting liveness verification.',
             ]);
         }
 
         return $bytid->startLiveness($profile);
-        }
+    }
 
     public function completeBytidLiveness(
-        \App\Models\KycProfile $profile,
+        KycProfile $profile,
         string $sessionId,
-        \App\Services\BytidVerificationService $bytid
+        BytidVerificationService $bytid
     ): array {
         if ($profile->selfie_verification_reference !== $sessionId) {
-            abort(403, 'The liveness session does not belong to this KYC application.');
+            abort(
+                403,
+                'The liveness session does not belong to this KYC application.'
+            );
         }
 
         $session = $bytid->getLivenessSession($sessionId);
 
-        $status = strtolower((string) ($session['status'] ?? 'pending'));
+        $status = strtolower(
+            (string) ($session['status'] ?? 'pending')
+        );
 
         if (in_array($status, ['pending', 'processing'], true)) {
             return [
@@ -158,7 +259,7 @@ class KycService
             ];
         }
 
-        // The webhook is responsible for document verification.
+        // The webhook processes final verification results.
         return [
             'success' => true,
             'http_status' => 200,
@@ -168,7 +269,6 @@ class KycService
             ],
         ];
     }
-
 
     public function status(User $user): array
     {

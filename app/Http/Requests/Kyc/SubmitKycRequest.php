@@ -15,12 +15,7 @@ class SubmitKycRequest extends FormRequest
     public function rules(): array
     {
         return [
-            /*
-            |--------------------------------------------------------------------------
-            | Identity Document
-            |--------------------------------------------------------------------------
-            */
-
+            // Identity document details
             'id_document_type' => [
                 'required',
                 'string',
@@ -38,6 +33,7 @@ class SubmitKycRequest extends FormRequest
                 'max:100',
             ],
 
+            // Front of the document
             'id_document_path_front' => [
                 'required',
                 'file',
@@ -46,51 +42,13 @@ class SubmitKycRequest extends FormRequest
                 'max:5120',
             ],
 
+            // Back of the document
             'id_document_path_back' => [
                 'required',
                 'file',
                 'image',
                 'mimes:jpg,jpeg,png,webp',
                 'max:5120',
-            ],
-
-            /*
-            |--------------------------------------------------------------------------
-            | Selfie
-            |--------------------------------------------------------------------------
-            */
-
-            'selfie_path' => [
-                'required',
-                'file',
-                'image',
-                'mimes:jpg,jpeg,png,webp',
-                'max:5120',
-            ],
-
-            /*
-            |--------------------------------------------------------------------------
-            | Bank Account
-            |--------------------------------------------------------------------------
-            */
-
-            'bank_name' => [
-                'required',
-                'string',
-                'max:150',
-            ],
-
-            'bank_code' => [
-                'required',
-                'string',
-                'max:20',
-            ],
-
-            'account_number' => [
-                'required',
-                'string',
-                'max:50',
-                'regex:/^[0-9]+$/',
             ],
         ];
     }
@@ -130,30 +88,6 @@ class SubmitKycRequest extends FormRequest
 
             'id_document_path_back.max' =>
                 'The back document cannot exceed 5MB.',
-
-            'selfie_path.required' =>
-                'Please upload your selfie.',
-
-            'selfie_path.image' =>
-                'Your selfie must be an image.',
-
-            'selfie_path.mimes' =>
-                'Your selfie must be JPG, JPEG, PNG, or WEBP.',
-
-            'selfie_path.max' =>
-                'Your selfie cannot exceed 5MB.',
-
-            'bank_name.required' =>
-                'Please select your bank.',
-
-            'bank_code.required' =>
-                'The selected bank code is required.',
-
-            'account_number.required' =>
-                'Your bank account number is required.',
-
-            'account_number.regex' =>
-                'Your account number must contain digits only.',
         ];
     }
 }
