@@ -1,0 +1,8 @@
+// Add the import to routes/api.php:
+use App\Http\Controllers\Api\V1\BytidWebhookController;
+
+// Register outside the auth:sanctum + verified group, inside the existing v1 prefix:
+Route::post('/webhooks/bytid', BytidWebhookController::class)->middleware('throttle:120,1');
+
+// Add to config/services.php inside the existing 'bytid' array:
+'webhook_secret' => env('BYTID_WEBHOOK_SECRET'),

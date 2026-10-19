@@ -101,6 +101,75 @@ class KycService
         return $data;
     }
 
+    
+    public function startBytidLiveness(
+        \App\Models\KycProfile $profile,
+        \App\Services\BytidVerificationService $bytid
+    ): array {
+        if (
+            empty($profile->id_document_path_front) ||
+            empty($profile->id_document_type)
+        ) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'kyc' => 'Submit your identity document before starting liveness verification.',
+            ]);
+        }
+
+        return $bytid->startLiveness($profile);
+        }
+
+    public function completeBytidLiveness(
+        \App\Models\KycProfile $profile,
+        string $sessionId,
+        \App\Services\BytidVerificationService $bytid
+    ): array {
+        if ($profile->selfie_verification_reference !== $sessionId) {
+            abort(403, 'The liveness session does not belong to this KYC application.');
+        }
+
+        $session = $bytid->getLivenessSession($sessionId);
+
+        $status = strtolower((string) ($session['status'] ?? 'pending'));
+
+        if (in_array($status, ['pending', 'processing'], true)) {
+            return [
+                'success' => true,
+                'http_status' => 202,
+                'message' => 'Liveness verification is still processing.',
+                'data' => [
+                    'liveness_status' => $status,
+                ],
+            ];
+        }
+
+        if ($status !== 'passed') {
+            $profile->forceFill([
+                'selfie_verification_status' => 'failed',
+                'selfie_verified_at' => null,
+            ])->save();
+
+            return [
+                'success' => false,
+                'http_status' => 422,
+                'message' => 'Liveness verification failed. Start a new session to retry.',
+                'data' => [
+                    'liveness_status' => $status,
+                ],
+            ];
+        }
+
+        // The webhook is responsible for document verification.
+        return [
+            'success' => true,
+            'http_status' => 200,
+            'message' => 'Liveness passed. The webhook will process verification results.',
+            'data' => [
+                'liveness_status' => 'passed',
+            ],
+        ];
+    }
+
+
     public function status(User $user): array
     {
         return [

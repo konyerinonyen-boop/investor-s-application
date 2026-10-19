@@ -46,11 +46,9 @@ return [
    
 'bytid' => [
     'api_key' => env('BYTID_API_KEY'),
-    'base_url' => env(
-        'BYTID_BASE_URL',
-        'https://api.bytid.com/v1'
-    ),
+    'base_url' => env('BYTID_BASE_URL', 'https://api.bytid.com/v1'),
     'redirect_url' => env('BYTID_REDIRECT_URL'),
+    'webhook_secret' => env('BYTID_WEBHOOK_SECRET'),
 ],
 
 

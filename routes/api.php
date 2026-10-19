@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\BytidWebhookController;
 use App\Http\Controllers\Api\V1\InvestmentController;
 use App\Http\Controllers\Api\V1\KycController;
 use App\Http\Controllers\Api\V1\OpportunityController;
@@ -11,6 +12,7 @@ use App\Http\Controllers\PaymentController;
 use App\Http\Middleware\LogApiActivity;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+
 
 
 
@@ -59,6 +61,7 @@ Route::post(
         Route::get('/me', [AuthController::class, 'me']);
         Route::get('/opportunities', [OpportunityController::class, 'index']);
         Route::get('/opportunities/{id}', [OpportunityController::class, 'show']);
+        
         Route::get('/kyc', [KycController::class, 'status']);
         Route::post('/kyc/update', [KycController::class, 'update'])->middleware('kyc_verified');
         Route::post('/kyc/submit', [KycController::class, 'submit'])->middleware('kyc_verified');
@@ -68,9 +71,11 @@ Route::post(
         )->middleware('kyc_verified');
 
         Route::post(
-            '/kyc/bytid/complete',
+            '/kyc/bytid/{session_id}/complete',
             [KycController::class, 'completeBytidLiveness']
         );
+
+
         Route::post('/investments/equity', [InvestmentController::class, 'equity']);
         Route::post('/investments/{equity}/payment', [PaymentController::class, 'initializeInvestmentPayment']);
         Route::post('/payments/{payment}/verify', [PaymentController::class, 'verifyPayment']);
@@ -84,5 +89,9 @@ Route::post(
 
     });
        Route::post('webhook/{provider}', [PaymentController::class, 'webhook']);
+
+        Route::post('/webhooks/bytid', BytidWebhookController::class)
+    ->middleware('throttle:120,1');
 });
+
 

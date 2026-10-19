@@ -130,12 +130,20 @@ class BytidVerificationService
             $profile->id_document_path_front
         );
 
+       $reference = 'kyc-' . $profile->id . '-document-' . bin2hex(random_bytes(8));
+
+        $profile->forceFill([
+            'identity_verification_reference' => $reference,
+            'identity_verification_status' => 'pending',
+            'identity_verified_at' => null,
+        ])->save();
+
         $payload = [
             'front_image' => base64_encode($front),
             'document_type' => $documentType,
             'liveness_session_id' => $sessionId,
             'verify_with_registry' => true,
-            'reference' => 'kyc-' . $profile->id . '-document',
+            'reference' => $reference,
         ];
 
         if ($profile->id_document_path_back) {
@@ -172,13 +180,11 @@ class BytidVerificationService
             default => 'pending',
         };
 
-        $profile->forceFill([
-            'identity_verification_reference' =>
-                $result['id'] ?? $result['reference'] ?? null,
-            'identity_verification_status' => $identityStatus,
-            'identity_verified_at' => $identityStatus === 'verified'
-                ? now()
-                : null,
+       $profile->forceFill([
+    'identity_verification_status' => $identityStatus,
+    'identity_verified_at' => $identityStatus === 'verified'
+        ? now()
+        : null,
         ])->save();
 
 
