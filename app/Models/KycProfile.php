@@ -39,6 +39,7 @@ class KycProfile extends Model
         'bank_verification_status',
         'bank_verification_reference',
         'bank_verified_at',
+        'bytid_document_verification_id',
     ];
     protected function casts(): array
     {

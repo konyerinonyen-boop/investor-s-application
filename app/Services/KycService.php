@@ -71,17 +71,14 @@ class KycService
      *     'provider_result' => [...]
      * ]
      */
-    public function submit(
-        User $user,
-        array $data,
-        array $bytidResult
-    ): array {
-        return $this->saveSubmission(
-            $user,
-            $data,
-            $bytidResult
-        );
-    }
+
+public function submit(
+    User $user,
+    array $data,
+    ?array $bytidResult = null
+): array {
+    return $this->saveSubmission($user, $data, $bytidResult);
+}
 
     /**
      * Update an existing KYC submission.
@@ -116,7 +113,9 @@ class KycService
         $data['rejection_reason'] = null;
 
         // Save the reference returned by our Bytid submission method.
+      
         if ($bytidResult !== null) {
+            // Retain compatibility with callers that already submitted a document.
             $reference = $bytidResult['reference'] ?? null;
 
             if (! is_string($reference) || $reference === '') {
@@ -126,16 +125,21 @@ class KycService
             }
 
             $data['identity_verification_reference'] = $reference;
-
-            // The request succeeding does not mean the document
-            // has passed all verification checks.
-            $data['identity_verification_status'] = 'pending';
-            $data['identity_verified_at'] = null;
         } else {
-            $data['identity_verification_status'] = 'pending';
-            $data['identity_verification_reference'] = null;
-            $data['identity_verified_at'] = null;
+            // Generate and save the reference BEFORE contacting Bytid.
+            $data['identity_verification_reference'] =
+                'kyc-user-' . $user->id . '-document-' . Str::uuid();
         }
+
+        $data['identity_verification_status'] = 'pending';
+        $data['identity_verified_at'] = null;
+        $data['bytid_document_verification_id'] = null;
+
+        // A new submission starts a new liveness verification flow.
+        $data['selfie_verification_status'] = 'pending';
+        $data['selfie_verification_reference'] = null;
+        $data['selfie_verified_at'] = null;
+
 
         // A new submission starts a new liveness verification flow.
         $data['selfie_verification_status'] = 'pending';

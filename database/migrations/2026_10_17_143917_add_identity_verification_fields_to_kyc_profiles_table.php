@@ -19,7 +19,10 @@ return new class extends Migration
 
             $table->timestamp('identity_verified_at')
                 ->nullable();
-
+    
+            $table->string('bytid_document_verification_id')
+                    ->nullable()
+                    ->index();
             // Selfie verification
             $table->string('selfie_verification_status')
                 ->default('pending');
@@ -48,6 +51,9 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('kyc_profiles', function (Blueprint $table) {
+               $table->dropIndex([
+                'bytid_document_verification_id',
+            ]);
             $table->dropColumn([
                 'identity_verification_status',
                 'identity_verification_reference',
@@ -59,6 +65,7 @@ return new class extends Migration
                 'bank_verification_reference',
                 'bank_verified_at',
                 'account_name',
+                'bytid_document_verification_id'
             ]);
         });
     }

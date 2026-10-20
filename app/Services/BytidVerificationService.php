@@ -175,7 +175,39 @@ class BytidVerificationService
             $payload['liveness_session_id'] = $livenessSessionId;
         }
 
-        $result = $this->post('/documents/verify', $payload);
+       
+        $response = $this->client()->post('/documents/verify', $payload);
+        $body = $response->json();
+
+        if (
+            $response->status() === 409
+            && data_get($body, 'error.code') === 'duplicate_reference'
+        ) {
+            // The original request may have succeeded even though its response
+            // was lost. Retrieve the existing verification using the same reference.
+            $existing = $this->get(
+                '/verifications?reference=' . rawurlencode($reference)
+            );
+
+            if (array_is_list($existing)) {
+                $result = $existing[0] ?? [];
+            } else {
+                $result = $existing['verification']
+                    ?? ($existing['results'][0] ?? $existing);
+            }
+
+            if (! is_array($result) || $result === []) {
+                throw new RuntimeException(
+                    'Bytid reported a duplicate reference, but the existing verification could not be retrieved.'
+                );
+            }
+        } else {
+            $result = $this->parseResponse(
+                $response,
+                'Bytid document verification request failed.'
+            );
+        }
+
 
         return [
             ...$result,
@@ -240,6 +272,7 @@ class BytidVerificationService
      * The profile is marked verified only when Bytid reports
      * verified and the required checks pass.
      */
+      
     public function verifyDocument(
         KycProfile $profile,
         string $sessionId
@@ -256,27 +289,31 @@ class BytidVerificationService
             );
         }
 
-        $documentType = $this->mapDocumentType(
-            (string) $profile->id_document_type
-        );
-
-        $reference = 'kyc-' . $profile->id . '-document-' .
-            Str::uuid()->toString();
+        if (empty($profile->identity_verification_reference)) {
+            throw new RuntimeException(
+                'The saved Bytid document reference is missing.'
+            );
+        }
 
         $result = $this->submitStoredDocument(
             userId: (int) $profile->user_id,
-            documentType: $documentType,
+            documentType: (string) $profile->id_document_type,
             frontPath: $profile->id_document_path_front,
             backPath: $profile->id_document_path_back,
             livenessSessionId: $sessionId,
-            reference: $reference,
+            reference: $profile->identity_verification_reference,
         );
 
-        $providerStatus = $result['status'] ?? null;
+        $providerStatus = strtolower(
+            (string) ($result['status'] ?? 'pending')
+        );
 
-        $faceMatchStatus = data_get(
-            $result,
-            'checks.face_match.status'
+        $faceMatchStatus = strtolower(
+            (string) data_get(
+                $result,
+                'checks.face_match.status',
+                'unknown'
+            )
         );
 
         $documentTypeMatched = data_get(
@@ -284,12 +321,19 @@ class BytidVerificationService
             'checks.document_type_matches'
         ) === true;
 
-        $registryStatus = data_get(
-            $result,
-            'checks.registry.status'
+        $registryStatus = strtolower(
+            (string) data_get(
+                $result,
+                'checks.registry.status',
+                'unknown'
+            )
         );
 
-        $registryPassed = $documentType === 'passport'
+        $mappedDocumentType = $this->mapDocumentType(
+            (string) $profile->id_document_type
+        );
+
+        $registryPassed = $mappedDocumentType === 'passport'
             || $registryStatus === 'verified';
 
         $identityStatus = match (true) {
@@ -303,11 +347,22 @@ class BytidVerificationService
                 && $registryPassed
                 => 'verified',
 
+            $providerStatus === 'review'
+                => 'review',
+
             default => 'pending',
         };
 
+        $verificationId = $result['id']
+            ?? $result['verification_id']
+            ?? null;
+
         $profile->forceFill([
+            'bytid_document_verification_id' =>
+                is_string($verificationId) ? $verificationId : null,
+
             'identity_verification_status' => $identityStatus,
+
             'identity_verified_at' => $identityStatus === 'verified'
                 ? now()
                 : null,
@@ -315,6 +370,7 @@ class BytidVerificationService
 
         return $result;
     }
+        
 
     /**
      * Retrieve a document verification result from Bytid.

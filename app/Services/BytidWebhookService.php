@@ -1,20 +1,34 @@
+
 <?php
 
 namespace App\Services;
 
+use App\Jobs\SubmitBytidDocument;
 use App\Models\BytidWebhookEvent;
 use App\Models\KycProfile;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
 
 class BytidWebhookService
 {
-    public function process(string $eventId, string $eventType, array $payload): void
-    {
-        DB::transaction(function () use ($eventId, $eventType, $payload): void {
-            // Unique DB constraint handles concurrent duplicate deliveries.
-            $event = BytidWebhookEvent::query()->where('event_id', $eventId)->lockForUpdate()->first();
+    public function process(
+        string $eventId,
+        string $eventType,
+        array $payload
+    ): void {
+        DB::transaction(function () use (
+            $eventId,
+            $eventType,
+            $payload
+        ): void {
+            $event = BytidWebhookEvent::query()
+                ->where('event_id', $eventId)
+                ->lockForUpdate()
+                ->first();
+
+            // This event has already been processed successfully.
             if ($event?->processed_at !== null) {
                 return;
             }
@@ -25,33 +39,37 @@ class BytidWebhookService
                         'event_id' => $eventId,
                         'event_type' => $eventType,
                     ]);
-                } catch (\Illuminate\Database\UniqueConstraintViolationException $exception) {
-                    // A concurrent request inserted this event. Throw to let the provider retry.
+                } catch (QueryException $exception) {
+                    // A concurrent delivery may have inserted this event.
+                    // Throwing causes the controller to return 500 so
+                    // the provider can retry.
                     throw $exception;
                 }
             }
 
-            $data = is_array($payload['data'] ?? null) ? $payload['data'] : [];
+            $data = is_array($payload['data'] ?? null)
+                ? $payload['data']
+                : [];
 
             switch ($eventType) {
                 case 'liveness.completed':
                     $this->handleLivenessCompleted($data);
                     break;
+
                 case 'document.completed':
-                    $this->handleDocumentCompleted($data);
-                    break;
                 case 'kyc.completed':
                 case 'verification.completed':
-                    // Event envelopes differ by product. Only apply when a documented reference is present.
                     $this->handleDocumentCompleted($data);
                     break;
+
+                // Valid events that this KYC workflow does not use.
                 case 'webhook.test':
                 case 'address.completed':
                 case 'aml.match_found':
-                    // Acknowledge valid events not currently used by this application's KYC flow.
                     break;
+
                 default:
-                    // Unknown signed event: record it to avoid endless retries; no KYC changes.
+                    // Unknown signed events are recorded but do not change KYC.
                     break;
             }
 
@@ -65,8 +83,11 @@ class BytidWebhookService
     private function handleLivenessCompleted(array $data): void
     {
         $sessionId = $data['id'] ?? $data['session_id'] ?? null;
+
         if (! is_string($sessionId) || $sessionId === '') {
-            throw new RuntimeException('Bytid liveness event has no session ID.');
+            throw new RuntimeException(
+                'Bytid liveness event has no session ID.'
+            );
         }
 
         $profile = KycProfile::query()
@@ -74,30 +95,41 @@ class BytidWebhookService
             ->lockForUpdate()
             ->first();
 
-        // Unmatched events may belong to an old attempt. Do not guess a profile.
+        // Do not guess which profile an unmatched event belongs to.
         if (! $profile) {
             return;
         }
 
-        $status = Str::lower((string) ($data['status'] ?? 'pending'));
+        $status = Str::lower(
+            (string) ($data['status'] ?? 'pending')
+        );
 
-        if (in_array($status, ['passed', 'verified', 'completed'], true)) {
+        if (in_array(
+            $status,
+            ['passed', 'verified', 'completed'],
+            true
+        )) {
             $profile->forceFill([
                 'selfie_verification_status' => 'verified',
                 'selfie_verified_at' => now(),
             ])->save();
 
-            // Confirm authoritative session status before submitting document verification.
-            $session = app(BytidVerificationService::class)->getLivenessSession($sessionId);
-            if (($session['status'] ?? null) === 'passed') {
-                app(BytidVerificationService::class)->verifyDocument($profile->fresh(), $sessionId);
-            }
+            // The queued job runs after the transaction commits.
+            // It confirms the authoritative liveness status with Bytid
+            // before submitting the document.
+            SubmitBytidDocument::dispatch(
+                (int) $profile->id,
+                $sessionId
+            )->afterCommit();
 
             return;
         }
 
-        if (in_array($status, ['failed', 'rejected', 'expired'], true)) {
-            // Failed attempt can be retried; do not reject the whole KYC application.
+        if (in_array(
+            $status,
+            ['failed', 'rejected', 'expired'],
+            true
+        )) {
             $profile->forceFill([
                 'selfie_verification_status' => 'failed',
                 'selfie_verified_at' => null,
@@ -107,10 +139,13 @@ class BytidWebhookService
 
     private function handleDocumentCompleted(array $data): void
     {
-        $reference = $data['reference'] ?? data_get($data, 'metadata.reference');
+        $reference = $data['reference']
+            ?? data_get($data, 'metadata.reference');
+
         if (! is_string($reference) || $reference === '') {
-            // Payload needs a documented correlatable ID/reference; never infer the user.
-            throw new RuntimeException('Bytid document event has no verification reference.');
+            throw new RuntimeException(
+                'Bytid document event has no verification reference.'
+            );
         }
 
         $profile = KycProfile::query()
@@ -118,33 +153,81 @@ class BytidWebhookService
             ->lockForUpdate()
             ->first();
 
+        // It may belong to an old attempt. Never guess a profile.
         if (! $profile) {
-            // Reference may be from an old attempt; do not mutate another profile.
             return;
         }
 
-        $status = Str::lower((string) ($data['status'] ?? 'review'));
-        $faceStatus = Str::lower((string) data_get($data, 'checks.face_match.status', 'unknown'));
-        $typeMatches = data_get($data, 'checks.document_type_matches') === true;
-        $registryStatus = Str::lower((string) data_get($data, 'checks.registry.status', 'unknown'));
-        $registryPassed = $profile->id_document_type === 'passport' || $registryStatus === 'verified';
+        $status = Str::lower(
+            (string) ($data['status'] ?? 'review')
+        );
+
+        $faceStatus = Str::lower(
+            (string) data_get(
+                $data,
+                'checks.face_match.status',
+                'unknown'
+            )
+        );
+
+        $typeMatches = data_get(
+            $data,
+            'checks.document_type_matches'
+        ) === true;
+
+        $registryStatus = Str::lower(
+            (string) data_get(
+                $data,
+                'checks.registry.status',
+                'unknown'
+            )
+        );
+
+        $isPassport = $profile->id_document_type === 'passport';
+
+        $registryPassed = $isPassport
+            || $registryStatus === 'verified';
 
         $identityStatus = match (true) {
-            $status === 'rejected', $faceStatus === 'not_matched' => 'rejected',
-            $status === 'verified' && $faceStatus === 'matched' && $typeMatches && $registryPassed => 'verified',
+            $status === 'rejected',
+            $faceStatus === 'not_matched'
+                => 'rejected',
+
+            $status === 'verified'
+                && $faceStatus === 'matched'
+                && $typeMatches
+                && $registryPassed
+                => 'verified',
+
+            $status === 'review'
+                => 'review',
+
             default => 'pending',
         };
 
-        // Do not promote the overall KYC status from a provider event.
+        $verificationId = $data['id']
+            ?? $data['verification_id']
+            ?? null;
+
         $profile->forceFill([
+            'bytid_document_verification_id' =>
+                is_string($verificationId) ? $verificationId : null,
+
             'identity_verification_status' => $identityStatus,
-            'identity_verified_at' => $identityStatus === 'verified' ? now() : null,
+
+            'identity_verified_at' => $identityStatus === 'verified'
+                ? now()
+                : null,
+
+            // This is still awaiting your application's admin review.
             'status' => 'pending',
+
             'rejection_reason' => $identityStatus === 'rejected'
                 ? 'Bytid rejected the identity document.'
                 : null,
         ])->save();
 
-        $profile->user()->update(['kyc_status' => 'pending']);
+        // Do not approve or downgrade the user's overall KYC status here.
+        // Provider verification is evidence for your existing review flow.
     }
 }

@@ -30,38 +30,31 @@ class KycController extends Controller
         ]);
     }
 
+    
     public function submit(SubmitKycRequest $request)
     {
         $user = $request->user();
         $data = $request->validated();
 
-        // 1. Store the uploaded documents on Laravel's private local disk.
+        // Store files privately. Do not call Bytid from this request.
         $data = $this->kycService->storeUploadedDocuments($data);
 
-        // 2. Submit the stored documents to Bytid.
-        $bytidResult = $this->bytidVerificationService->submitStoredDocument(
-            userId: $user->id,
-            documentType: $data['id_document_type'],
-            frontPath: $data['id_document_path_front'],
-            backPath: $data['id_document_path_back'] ?? null,
-        );
-
-        // 3. Save the KYC submission and Bytid reference.
+        // Persist the profile and its Bytid reference first.
         $payload = $this->kycService->submit(
             $user,
-            $data,
-            $bytidResult
+            $data
         );
 
         return response()->json([
             'success' => true,
-            'message' => 'Identity document submitted successfully. Verification is pending.',
+            'message' => 'Identity document saved. Start liveness verification to continue.',
             'data' => [
                 'kyc_status' => $payload['user']->kyc_status,
                 'profile' => $payload['profile'],
             ],
         ], 202);
     }
+
 
     public function status(Request $request)
     {
