@@ -1,4 +1,3 @@
-
 <?php
 
 namespace App\Services;
@@ -97,7 +96,17 @@ class BytidWebhookService
 
         // Do not guess which profile an unmatched event belongs to.
         if (! $profile) {
-            return;
+            \Illuminate\Support\Facades\Log::warning(
+                'Bytid liveness webhook: no matching KYC profile',
+                [
+                    'session_id' => $sessionId,
+                    'event_data_keys' => array_keys($data),
+                ]
+            );
+
+            throw new RuntimeException(
+                'No KYC profile matches the Bytid liveness session.'
+            );
         }
 
         $status = Str::lower(
