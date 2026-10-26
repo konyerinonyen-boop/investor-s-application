@@ -5,280 +5,313 @@ namespace App\Services;
 use App\Models\KycProfile;
 use App\Models\User;
 use App\Repositories\KycProfileRepository;
-use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
-use Illuminate\Validation\ValidationException;
 
 class KycService
 {
     public function __construct(
-        protected KycProfileRepository $kycProfileRepository
-    ) {
-    }
+        private readonly KycProfileRepository $profiles,
+        private readonly SumsubVerificationService $sumsub,
+    ) {}
 
     /**
-     * Store the uploaded identity documents privately.
-     *
-     * Call this BEFORE contacting Bytid.
-     * The returned document fields contain file paths,
-     * not UploadedFile objects.
+     * Return the user's current KYC status and profile.
      */
-    public function storeUploadedDocuments(array $data): array
+    public function status(User $user): array
     {
-        $fileFields = [
-            'id_document_path_front' => 'kycDoc/front',
-            'id_document_path_back' => 'kycDoc/back',
+        return [
+            'kyc_status' => $user->kyc_status,
+            'profile' => $this->profiles->findForUser($user),
         ];
-
-        foreach ($fileFields as $field => $directory) {
-            if (! isset($data[$field])) {
-                continue;
-            }
-
-            $file = $data[$field];
-
-            // Do not store the same file twice.
-            if (! $file instanceof UploadedFile) {
-                continue;
-            }
-
-            $path = $file->storeAs(
-                $directory,
-                Str::uuid() . '.' . $file->extension(),
-                'local'
-            );
-
-            if ($path === false) {
-                throw new \RuntimeException(
-                    "Could not store the uploaded file: {$field}"
-                );
-            }
-
-            $data[$field] = $path;
-        }
-
-        return $data;
     }
 
     /**
-     * Save a KYC submission after the Bytid request succeeds.
-     *
-     * $bytidResult should contain:
-     * [
-     *     'reference' => '...',
-     *     'provider_result' => [...]
-     * ]
+     * Save KYC details without submitting them for review.
      */
-
-public function submit(
-    User $user,
-    array $data,
-    ?array $bytidResult = null
-): array {
-    return $this->saveSubmission($user, $data, $bytidResult);
-}
-
-    /**
-     * Update an existing KYC submission.
-     */
-    public function update(User $user, array $data): array
+    public function update(User $user, array $data): KycProfile
     {
-        return $this->saveSubmission($user, $data);
-    }
+        $data = $this->storeUploadedDocuments($data);
 
-    protected function saveSubmission(
-        User $user,
-        array $data,
-        ?array $bytidResult = null
-    ): array {
-        // Never allow the client to choose administrative fields.
         unset(
-            $data['user_id'],
-            $data['status'],
-            $data['reviewed_by'],
-            $data['reviewed_at'],
-            $data['rejection_reason'],
-            $data['submitted_ip']
+            $data['id_document_front'],
+            $data['id_document_back']
         );
 
-        // Supports existing callers that still pass UploadedFile objects.
-        // Already-stored paths are left unchanged.
-        $data = $this->storeUploadedFiles($data);
+        $profile = $this->profiles->updateForUser($user, $data);
 
-        $data['status'] = 'pending';
-        $data['trigger_source'] = 'resubmission';
-        $data['submitted_ip'] = request()->ip();
-        $data['rejection_reason'] = null;
+        Log::info('KYC: Profile details updated.', [
+            'user_id' => $user->id,
+            'profile_id' => $profile->id,
+        ]);
 
-        // Save the reference returned by our Bytid submission method.
-      
-        if ($bytidResult !== null) {
-            // Retain compatibility with callers that already submitted a document.
-            $reference = $bytidResult['reference'] ?? null;
+        return $profile;
+    }
 
-            if (! is_string($reference) || $reference === '') {
-                throw new \RuntimeException(
-                    'The Bytid document reference is missing.'
-                );
-            }
+    /**
+     * Save and submit KYC details for verification.
+     */
+    public function submit(User $user, array $data): KycProfile
+    {
+        $data = $this->storeUploadedDocuments($data);
 
-            $data['identity_verification_reference'] = $reference;
-        } else {
-            // Generate and save the reference BEFORE contacting Bytid.
-            $data['identity_verification_reference'] =
-                'kyc-user-' . $user->id . '-document-' . Str::uuid();
-        }
+        unset(
+            $data['id_document_front'],
+            $data['id_document_back']
+        );
 
-        $data['identity_verification_status'] = 'pending';
-        $data['identity_verified_at'] = null;
-        $data['bytid_document_verification_id'] = null;
+        return DB::transaction(function () use ($user, $data) {
+            $profile = $this->profiles->firstOrCreateForUser($user);
 
-        // A new submission starts a new liveness verification flow.
-        $data['selfie_verification_status'] = 'pending';
-        $data['selfie_verification_reference'] = null;
-        $data['selfie_verified_at'] = null;
+            $previousStatus = $profile->status;
 
+            $profile->fill($data);
 
-        // A new submission starts a new liveness verification flow.
-        $data['selfie_verification_status'] = 'pending';
-        $data['selfie_verification_reference'] = null;
-        $data['selfie_verified_at'] = null;
-
-        $profile = DB::transaction(function () use ($user, $data) {
-            $profile = $this->kycProfileRepository
-                ->updateForUser($user, $data);
+            $profile->forceFill([
+                'status' => 'pending',
+                'trigger_source' => 'resubmission',
+                'submitted_ip' => request()->ip(),
+                'identity_verification_status' => 'pending',
+                'identity_verified_at' => null,
+                'selfie_verification_status' => 'pending',
+                'selfie_verified_at' => null,
+                'rejection_reason' => null,
+            ])->save();
 
             $user->forceFill([
                 'kyc_status' => 'pending',
             ])->save();
 
-            return $profile;
-        });
+            Log::info('KYC: Submission saved.', [
+                'user_id' => $user->id,
+                'profile_id' => $profile->id,
+                'previous_status' => $previousStatus,
+                'new_status' => 'pending',
+            ]);
 
-        return [
-            'user' => $user->fresh(),
-            'profile' => $profile,
-        ];
+            return $profile->fresh();
+        });
     }
 
     /**
-     * Store any remaining uploaded files privately.
+     * Start a Sumsub verification session.
      */
-    protected function storeUploadedFiles(array $data): array
+    public function startSumsub(User $user): array
     {
-        $fileFields = [
-            'id_document_path_front' => 'kycDoc/front',
-            'id_document_path_back' => 'kycDoc/back',
-            'selfie_path' => 'kycDoc/selfie',
-        ];
+        $profile = $this->profiles->firstOrCreateForUser(
+            $user,
+            ['status' => 'not_started']
+        );
 
-        foreach ($fileFields as $field => $directory) {
+        if ($profile->status === 'approved') {
+            Log::notice('Sumsub: Verification already approved.', [
+                'user_id' => $user->id,
+            ]);
+
+            abort(409, 'Your identity verification is already approved.');
+        }
+
+        Log::info('Sumsub: Starting verification.', [
+            'user_id' => $user->id,
+            'level_name' => config('services.sumsub.level_name'),
+        ]);
+
+        try {
+            $result = $this->sumsub->createAccessToken($user);
+
+            Log::info('Sumsub: Verification session created.', [
+                'user_id' => $user->id,
+                'expires_in' => $result['expires_in'] ?? null,
+            ]);
+
+            return [
+                'token' => $result['token'],
+                'expires_in' => $result['expires_in'] ?? 600,
+            ];
+        } catch (\Throwable $exception) {
+            Log::error('Sumsub: Failed to create verification session.', [
+                'user_id' => $user->id,
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ]);
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * Process Sumsub webhook events.
+     */
+    public function processSumsubWebhook(array $payload): void
+    {
+        $eventType = $payload['type'] ?? 'unknown';
+
+        if ($eventType !== 'applicantReviewed') {
+            Log::info('Sumsub: Webhook event ignored.', [
+                'event_type' => $eventType,
+            ]);
+
+            return;
+        }
+
+        $externalUserId = $payload['externalUserId']
+            ?? $payload['applicant']['externalUserId']
+            ?? null;
+
+        $applicantId = $payload['applicantId']
+            ?? $payload['applicant']['id']
+            ?? null;
+
+        if (! $externalUserId) {
+            Log::warning('Sumsub: Webhook has no external user ID.', [
+                'event_type' => $eventType,
+                'applicant_id' => $applicantId,
+            ]);
+
+            return;
+        }
+
+        $user = User::query()->find($externalUserId);
+
+        if (! $user) {
+            Log::warning('Sumsub: User not found for webhook.', [
+                'external_user_id' => $externalUserId,
+                'applicant_id' => $applicantId,
+            ]);
+
+            return;
+        }
+
+        DB::transaction(function () use (
+            $payload,
+            $user,
+            $applicantId,
+            $eventType
+        ) {
+            $profile = $this->profiles->firstOrCreateForUser($user);
+
+            $previousStatus = $profile->status;
+            $previousIdentityStatus = $profile->identity_verification_status;
+
+            $reviewStatus = $payload['reviewStatus'] ?? null;
+            $reviewAnswer = $payload['reviewResult']['reviewAnswer'] 
+                ?? $payload['reviewAnswer']
+                ?? null;
+
+            $profileChanges = [];
+
+            if ($applicantId) {
+                $profileChanges['sumsub_applicant_id'] = $applicantId;
+            }
+
             if (
-                ! isset($data[$field]) ||
-                ! $data[$field] instanceof UploadedFile
+                $reviewStatus === 'completed'
+                && $reviewAnswer === 'GREEN'
             ) {
-                continue;
-            }
+                $profileChanges['identity_verification_status'] = 'verified';
+                $profileChanges['identity_verified_at'] = now();
 
-            $file = $data[$field];
+                /*
+                 * Only mark selfie verification as verified if your
+                 * Sumsub level actually verifies the required selfie
+                 * or liveness check.
+                 *
+                 * Do not automatically approve the entire KYC profile
+                 * until the required bank verification is complete.
+                 */
 
-            $path = $file->storeAs(
-                $directory,
-                Str::uuid() . '.' . $file->extension(),
-                'local'
-            );
-
-            if ($path === false) {
-                throw new \RuntimeException(
-                    "Could not store the uploaded file: {$field}"
+                $bankVerified = in_array(
+                    $profile->bank_verification_status,
+                    ['verified', 'approved'],
+                    true
                 );
+
+                $profileChanges['status'] = $bankVerified
+                    ? 'approved'
+                    : 'pending';
+
+                $profileChanges['rejection_reason'] = null;
+
+                $user->forceFill([
+                    'kyc_status' => $bankVerified
+                        ? 'approved'
+                        : 'pending',
+                ])->save();
+
+                Log::info('Sumsub: Identity review passed.', [
+                    'user_id' => $user->id,
+                    'applicant_id' => $applicantId,
+                    'bank_verified' => $bankVerified,
+                ]);
+            } elseif (
+                $reviewStatus === 'completed'
+                && $reviewAnswer === 'RED'
+            ) {
+                $reason = $payload['reviewResult']['clientComment']
+                    ?? $payload['reviewResult']['moderationComment']
+                    ?? 'Identity verification was rejected.';
+
+                $profileChanges['identity_verification_status'] = 'rejected';
+                $profileChanges['status'] = 'rejected';
+                $profileChanges['rejection_reason'] = $reason;
+
+                $user->forceFill([
+                    'kyc_status' => 'rejected',
+                ])->save();
+
+                Log::warning('Sumsub: Identity review rejected.', [
+                    'user_id' => $user->id,
+                    'applicant_id' => $applicantId,
+                    'reason' => $reason,
+                ]);
+            } else {
+                Log::info('Sumsub: Review is not final.', [
+                    'user_id' => $user->id,
+                    'applicant_id' => $applicantId,
+                    'review_status' => $reviewStatus,
+                    'review_answer' => $reviewAnswer,
+                ]);
             }
 
-            $data[$field] = $path;
+            if ($profileChanges !== []) {
+                $profile->forceFill($profileChanges)->save();
+            }
+
+            Log::info('KYC: Sumsub webhook processing completed.', [
+                'user_id' => $user->id,
+                'applicant_id' => $applicantId,
+                'event_type' => $eventType,
+                'previous_status' => $previousStatus,
+                'new_status' => $profile->status,
+                'previous_identity_status' => $previousIdentityStatus,
+                'new_identity_status' => $profile->identity_verification_status,
+            ]);
+        });
+    }
+
+    /**
+     * Store uploaded documents privately.
+     */
+    private function storeUploadedDocuments(array $data): array
+    {
+        foreach ([
+            'id_document_front' => 'id_document_path_front',
+            'id_document_back' => 'id_document_path_back',
+        ] as $fileKey => $pathKey) {
+            if (
+                isset($data[$fileKey])
+                && $data[$fileKey] instanceof \Illuminate\Http\UploadedFile
+            ) {
+                $data[$pathKey] = $data[$fileKey]->store(
+                    'kycDoc',
+                    'private'
+                );
+
+                unset($data[$fileKey]);
+            }
         }
 
         return $data;
-    }
-
-    public function startBytidLiveness(
-        KycProfile $profile,
-        BytidVerificationService $bytid
-    ): array {
-        if (
-            empty($profile->id_document_path_front) ||
-            empty($profile->id_document_type)
-        ) {
-            throw ValidationException::withMessages([
-                'kyc' => 'Submit your identity document before starting liveness verification.',
-            ]);
-        }
-
-        return $bytid->startLiveness($profile);
-    }
-
-    public function completeBytidLiveness(
-        KycProfile $profile,
-        string $sessionId,
-        BytidVerificationService $bytid
-    ): array {
-        if ($profile->selfie_verification_reference !== $sessionId) {
-            abort(
-                403,
-                'The liveness session does not belong to this KYC application.'
-            );
-        }
-
-        $session = $bytid->getLivenessSession($sessionId);
-
-        $status = strtolower(
-            (string) ($session['status'] ?? 'pending')
-        );
-
-        if (in_array($status, ['pending', 'processing'], true)) {
-            return [
-                'success' => true,
-                'http_status' => 202,
-                'message' => 'Liveness verification is still processing.',
-                'data' => [
-                    'liveness_status' => $status,
-                ],
-            ];
-        }
-
-        if ($status !== 'passed') {
-            $profile->forceFill([
-                'selfie_verification_status' => 'failed',
-                'selfie_verified_at' => null,
-            ])->save();
-
-            return [
-                'success' => false,
-                'http_status' => 422,
-                'message' => 'Liveness verification failed. Start a new session to retry.',
-                'data' => [
-                    'liveness_status' => $status,
-                ],
-            ];
-        }
-
-        // The webhook processes final verification results.
-        return [
-            'success' => true,
-            'http_status' => 200,
-            'message' => 'Liveness passed. The webhook will process verification results.',
-            'data' => [
-                'liveness_status' => 'passed',
-            ],
-        ];
-    }
-
-    public function status(User $user): array
-    {
-        return [
-            'kyc_status' => $user->kyc_status,
-            'profile' => $user->kycProfile,
-        ];
     }
 }

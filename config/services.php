@@ -44,11 +44,17 @@ return [
  ],
  
    
-'bytid' => [
-    'api_key' => env('BYTID_API_KEY'),
-    'base_url' => env('BYTID_BASE_URL', 'https://api.bytid.com/v1'),
-    'redirect_url' => env('BYTID_REDIRECT_URL'),
-    'webhook_secret' => env('BYTID_WEBHOOK_SECRET'),
+
+
+'sumsub' => [
+    'app_token' => env('SUMSUB_APP_TOKEN'),
+    'secret_key' => env('SUMSUB_SECRET_KEY'),
+    'base_url' => env(
+        'SUMSUB_BASE_URL',
+        'https://api.sumsub.com'
+    ),
+    'level_name' => env('SUMSUB_LEVEL_NAME'),
+    'webhook_secret' => env('SUMSUB_WEBHOOK_SECRET'),
 ],
 
 

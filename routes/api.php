@@ -6,12 +6,14 @@ use App\Http\Controllers\Api\V1\InvestmentController;
 use App\Http\Controllers\Api\V1\KycController;
 use App\Http\Controllers\Api\V1\OpportunityController;
 use App\Http\Controllers\Api\V1\PortfolioController;
+use App\Http\Controllers\Api\V1\SumsubWebhookController;
 use App\Http\Controllers\Auth\ResendVerificationEmailController;
 use App\Http\Controllers\Auth\VerifyEmailController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Middleware\LogApiActivity;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+
 
 
 
@@ -87,11 +89,18 @@ Route::post(
         'depositToWallet',
     ])->middleware('throttle:5,1');
 
+            Route::post(
+            '/kyc/sumsub/token',
+            [KycController::class, 'startSumsub']
+        )->middleware('throttle:10,1');
+
     });
        Route::post('webhook/{provider}', [PaymentController::class, 'webhook']);
 
-        Route::post('/webhooks/bytid', BytidWebhookController::class)
-    ->middleware('throttle:120,1');
+        Route::post(
+    '/webhooks/sumsub',
+    SumsubWebhookController::class
+)->middleware('throttle:120,1');
 });
 
 
