@@ -33,18 +33,25 @@ class KycService
      * Save bank details only. Provider-owned fields cannot be edited here.
      */
    
+
 public function update(User $user, array $data): KycProfile
 {
-    $bankCode = (string) $data['bank_code'];
-    $accountNumber = (string) $data['account_number'];
-
     $profile = $this->profiles->firstOrCreateForUser($user);
+
+    // Identity verification must be completed before bank verification.
+    if ($profile->identity_verification_status !== 'verified') {
+        throw ValidationException::withMessages([
+            'identity' => 'Complete Sumsub identity verification before submitting your bank account.',
+        ]);
+    }
 
     if ($profile->status === 'verified') {
         abort(409, 'Your KYC verification is already complete.');
     }
 
-    // Get the official bank list from Paystack.
+    $bankCode = (string) $data['bank_code'];
+    $accountNumber = (string) $data['account_number'];
+
     try {
         $banks = $this->paystack->listBanks();
     } catch (\Throwable $exception) {
@@ -54,47 +61,27 @@ public function update(User $user, array $data): KycProfile
         ]);
 
         throw ValidationException::withMessages([
-            'bank_code' =>
-                'We could not load the bank information. Please try again shortly.',
+            'bank_code' => 'We could not load bank information. Please try again shortly.',
         ]);
     }
 
-    // Do not trust a bank code just because the browser submitted it.
     $selectedBank = collect($banks)->first(
-        fn (array $bank) => $bank['code'] === $bankCode
+        fn (array $bank) => (string) $bank['code'] === $bankCode
     );
 
     if (! $selectedBank) {
         throw ValidationException::withMessages([
-            'bank_code' =>
-                'Please select a valid bank from the bank list.',
+            'bank_code' => 'Please select a valid bank from the bank list.',
         ]);
     }
 
-    // Save the selected bank and mark verification as pending.
-    $profile->forceFill([
-        'bank_name' => $selectedBank['name'],
-        'bank_code' => $selectedBank['code'],
-        'account_number' => $accountNumber,
-        'account_name' => null,
-        'bank_verification_status' => 'pending',
-        'bank_verification_reference' => null,
-        'bank_verified_at' => null,
-        'submitted_ip' => request()->ip(),
-    ])->save();
-
+    // Resolve the account BEFORE saving the submitted bank details.
     try {
         $resolved = $this->paystack->resolveAccount(
             $accountNumber,
-            $selectedBank['code'],
+            (string) $selectedBank['code'],
         );
     } catch (\Throwable $exception) {
-        $profile->forceFill([
-            'bank_verification_status' => 'failed',
-            'account_name' => null,
-            'bank_verified_at' => null,
-        ])->save();
-
         Log::warning('Paystack: Bank account resolution failed.', [
             'user_id' => $user->id,
             'bank_code' => $selectedBank['code'],
@@ -102,30 +89,31 @@ public function update(User $user, array $data): KycProfile
         ]);
 
         throw ValidationException::withMessages([
-            'account_number' =>
-                'Paystack could not verify this account. Check your bank and account number, then try again.',
+            'account_number' => 'Paystack could not verify this account. Check your bank and account number, then try again.',
         ]);
     }
 
-    // Store only the account name returned by Paystack.
-    $profile->account_name = $resolved['account_name'];
-    $profile->bank_verification_status = 'verified';
-    $profile->bank_verified_at = now();
-
-    $identityVerified =
-        $profile->identity_verification_status === 'verified';
-
-    $profile->status = $identityVerified ? 'verified' : 'pending';
-    $profile->save();
-
-    $user->forceFill([
-        'kyc_status' => $profile->status,
+    // Save the bank details only after Paystack returns a verified account name.
+    $profile->forceFill([
+        'bank_name' => $selectedBank['name'],
+        'bank_code' => $selectedBank['code'],
+        'account_number' => $resolved['account_number'] ?? $accountNumber,
+        'account_name' => $resolved['account_name'],
+        'bank_verification_status' => 'verified',
+        'bank_verification_reference' => null,
+        'bank_verified_at' => now(),
+        'submitted_ip' => request()->ip(),
+        'status' => 'verified',
+        'rejection_reason' => null,
     ])->save();
 
-    Log::info('Paystack: Bank account verified.', [
+    $user->forceFill([
+        'kyc_status' => 'verified',
+    ])->save();
+
+    Log::info('Paystack: Bank account verified and KYC completed.', [
         'user_id' => $user->id,
         'profile_id' => $profile->id,
-        'identity_verified' => $identityVerified,
     ]);
 
     return $profile->fresh();

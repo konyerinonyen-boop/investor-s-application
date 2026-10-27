@@ -71,8 +71,8 @@ Route::post(
 
         Route::get('/kyc/banks', [KycController::class, 'banks'])->middleware('throttle:30,1');
 
-        Route::post('/kyc/update', [KycController::class, 'update'])
-            ->middleware('throttle:10,1', 'kyc_verified');
+       Route::post('/kyc/bank-account', [KycController::class, 'submitBankAccount'])
+    ->middleware('throttle:10,1', 'kyc_verified');
     
         Route::post('/investments/equity', [InvestmentController::class, 'equity']);
         Route::post('/investments/{equity}/payment', [PaymentController::class, 'initializeInvestmentPayment']);

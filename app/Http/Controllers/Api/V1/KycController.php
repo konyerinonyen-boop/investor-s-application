@@ -25,7 +25,7 @@ class KycController extends Controller
         ]);
     }
 
-    public function update(SubmitKycRequest $request)
+    public function submitBankAccount(SubmitKycRequest $request)
     {
         $profile = $this->kycService->update(
             $request->user(),

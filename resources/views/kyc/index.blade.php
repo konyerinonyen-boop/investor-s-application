@@ -188,6 +188,41 @@
             </button>
         </div>
 
+        
+        <div id="bank-section" class="hidden">
+            <h2>Verify your bank account</h2>
+            <p>
+                Your identity has been verified. Select your bank and enter
+                your 10-digit account number to complete KYC.
+            </p>
+
+            <form id="bank-form">
+                <label for="bank-code">Bank</label>
+                <select id="bank-code" required>
+                    <option value="">Loading banks...</option>
+                </select>
+
+                <label for="account-number">Account number</label>
+                <input
+                    id="account-number"
+                    type="text"
+                    inputmode="numeric"
+                    pattern="[0-9]{10}"
+                    minlength="10"
+                    maxlength="10"
+                    autocomplete="off"
+                    placeholder="Enter 10-digit account number"
+                    required
+                >
+
+                <button id="bank-submit-button" type="submit">
+                    Verify bank account
+                </button>
+            </form>
+
+            <p id="verified-account"></p>
+        </div>
+
         <div id="message" class="message hidden" role="status"
              aria-live="polite"></div>
 
@@ -213,6 +248,13 @@
     const accountMessage = document.getElementById('account-message');
     const sdkContainer = document.getElementById('sumsub-websdk-container');
 
+    const bankSection = document.getElementById('bank-section');
+const bankForm = document.getElementById('bank-form');
+const bankSelect = document.getElementById('bank-code');
+const bankSubmitButton = document.getElementById('bank-submit-button');
+const verifiedAccount = document.getElementById('verified-account');
+
+let banksLoaded = false;
     // Keep the application's bearer token in memory only.
     // The token is not saved in localStorage or sessionStorage.
     let apiToken = null;
@@ -271,29 +313,125 @@
         return result;
     }
 
-    async function refreshKycStatus() {
-        const result = await apiRequest('/api/v1/kyc', {
+
+async function refreshKycStatus() {
+    const result = await apiRequest('/api/v1/kyc', {
+        method: 'GET'
+    });
+
+    const data = result.data || {};
+    const profile = data.profile || {};
+    const identityStatus = profile.identity_verification_status || 'not started';
+    const bankStatus = profile.bank_verification_status || 'not started';
+    const overallStatus = data.kyc_status || profile.status || 'not started';
+
+    statusBox.textContent =
+        `KYC status: ${overallStatus}` +
+        ` | Identity: ${identityStatus}` +
+        ` | Bank: ${bankStatus}`;
+
+    const identityVerified = identityStatus === 'verified';
+    const bankVerified = bankStatus === 'verified';
+    const kycComplete = overallStatus === 'verified';
+
+    // Identity verification is complete; bank details are next.
+    bankSection.classList.toggle(
+        'hidden',
+        !identityVerified || bankVerified || kycComplete
+    );
+
+    startButton.disabled = identityVerified || kycComplete;
+
+    if (identityVerified) {
+        startButton.textContent = 'Identity verification completed';
+    } else {
+        startButton.textContent = 'Start identity verification';
+    }
+
+    if (identityVerified && !bankVerified && !kycComplete) {
+        await loadBanks();
+    }
+
+    if (bankVerified || kycComplete) {
+        bankForm.classList.add('hidden');
+        verifiedAccount.textContent = profile.account_name
+            ? `Verified account name: ${profile.account_name}`
+            : 'Your bank verification is complete.';
+    }
+
+    return data;
+}
+
+async function loadBanks() {
+    if (banksLoaded) return;
+
+    bankSelect.replaceChildren(
+        new Option('Loading banks...', '')
+    );
+
+    try {
+        const result = await apiRequest('/api/v1/kyc/banks', {
             method: 'GET'
         });
 
-        const data = result.data || {};
-        const profile = data.profile || {};
+        const banks = result.data || [];
 
-        statusBox.textContent =
-            `KYC status: ${data.kyc_status || profile.status || 'not started'}` +
-            ` | Identity: ${profile.identity_verification_status || 'not started'}` +
-            ` | Bank: ${profile.bank_verification_status || 'not started'}`;
+        bankSelect.replaceChildren(
+            new Option('Select your bank', '')
+        );
 
-        if (data.kyc_status === 'approved' || profile.status === 'approved') {
-            startButton.disabled = true;
-            startButton.textContent = 'Verification approved';
-        } else {
-            startButton.disabled = false;
-            startButton.textContent = 'Start identity verification';
-        }
+        banks.forEach((bank) => {
+            bankSelect.add(
+                new Option(bank.name, bank.code)
+            );
+        });
 
-        return data;
+        banksLoaded = true;
+    } catch (error) {
+        bankSelect.replaceChildren(
+            new Option('Unable to load banks — refresh to retry', '')
+        );
+
+        throw error;
     }
+}
+
+bankForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearMessage();
+
+    bankSubmitButton.disabled = true;
+    bankSubmitButton.textContent = 'Verifying account...';
+
+    try {
+        const result = await apiRequest('/api/v1/kyc/bank-account', {
+            method: 'POST',
+            body: JSON.stringify({
+                bank_code: bankSelect.value,
+                account_number: document
+                    .getElementById('account-number')
+                    .value.trim()
+            })
+        });
+
+        const profile = result.data || {};
+
+        verifiedAccount.textContent =
+            `Verified account name: ${profile.account_name || 'Verified'}`;
+
+        showMessage(
+            'Bank account verified successfully. Your KYC status is now complete.'
+        );
+
+        await refreshKycStatus();
+    } catch (error) {
+        showMessage(error.message);
+    } finally {
+        bankSubmitButton.disabled = false;
+        bankSubmitButton.textContent = 'Verify bank account';
+    }
+});
+
 
     loginForm.addEventListener('submit', async (event) => {
         event.preventDefault();
