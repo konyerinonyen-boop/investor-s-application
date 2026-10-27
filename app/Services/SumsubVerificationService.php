@@ -90,42 +90,71 @@ class SumsubVerificationService
         ];
     }
     
-public function verifyWebhook(
-    string $rawBody,
-    ?string $providedDigest,
-    ?string $algorithmHeader,
-): ?array {
+
+public function verifyWebhook(string $rawBody, ?string $signature, ?string $algorithm): ?array
+{
     $secret = config('services.sumsub.webhook_secret');
 
-    if (! $secret || ! $providedDigest) {
+    if (empty($secret) || empty($signature) || empty($algorithm)) {
+        \Illuminate\Support\Facades\Log::warning(
+            'Sumsub: Missing webhook signature configuration.',
+            [
+                'has_secret' => ! empty($secret),
+                'has_signature' => ! empty($signature),
+                'algorithm' => $algorithm,
+            ]
+        );
+
         return null;
     }
 
-    $algorithms = [
-        'HMAC_SHA256' => 'sha256',
-        'HMAC_SHA512' => 'sha512',
-        'HMAC_SHA1' => 'sha1',
-    ];
+    // Sumsub may send HMAC_SHA256_HEX instead of HMAC_SHA256.
+    $normalizedAlgorithm = strtoupper($algorithm);
 
-    $algorithm = strtoupper($algorithmHeader ?? 'HMAC_SHA256');
+    $hashAlgorithm = match ($normalizedAlgorithm) {
+        'HMAC_SHA256', 'HMAC_SHA256_HEX' => 'sha256',
+        'HMAC_SHA512', 'HMAC_SHA512_HEX' => 'sha512',
+        'HMAC_SHA1', 'HMAC_SHA1_HEX' => 'sha1',
+        default => null,
+    };
 
-    if (! isset($algorithms[$algorithm])) {
+    if ($hashAlgorithm === null) {
+        \Illuminate\Support\Facades\Log::warning(
+            'Sumsub: Unsupported webhook signature algorithm.',
+            ['algorithm' => $algorithm]
+        );
+
         return null;
     }
 
-    $expected = hash_hmac(
-        $algorithms[$algorithm],
+    // hash_hmac() returns a hexadecimal digest by default.
+    $expectedSignature = hash_hmac(
+        $hashAlgorithm,
         $rawBody,
         $secret
     );
 
-    if (! hash_equals($expected, $providedDigest)) {
+    if (! hash_equals($expectedSignature, trim($signature))) {
+        \Illuminate\Support\Facades\Log::warning(
+            'Sumsub: Webhook signature mismatch.',
+            ['algorithm' => $algorithm]
+        );
+
         return null;
     }
 
     $payload = json_decode($rawBody, true);
 
-    return is_array($payload) ? $payload : null;
+    if (! is_array($payload)) {
+        \Illuminate\Support\Facades\Log::warning(
+            'Sumsub: Webhook payload is invalid JSON.'
+        );
+
+        return null;
+    }
+
+    return $payload;
 }
+
 
 }
