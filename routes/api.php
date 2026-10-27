@@ -1,7 +1,6 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuthController;
-use App\Http\Controllers\Api\V1\BytidWebhookController;
 use App\Http\Controllers\Api\V1\InvestmentController;
 use App\Http\Controllers\Api\V1\KycController;
 use App\Http\Controllers\Api\V1\OpportunityController;

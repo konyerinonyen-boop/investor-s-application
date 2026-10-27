@@ -143,152 +143,145 @@ class KycService
     /**
      * Process Sumsub webhook events.
      */
-    public function processSumsubWebhook(array $payload): void
-    {
-        $eventType = $payload['type'] ?? 'unknown';
+  
+/**
+ * Process Sumsub review webhook events.
+ */
+public function processSumsubWebhook(array $payload): void
+{
+    $eventType = $payload['type'] ?? 'unknown';
 
-        if ($eventType !== 'applicantReviewed') {
-            Log::info('Sumsub: Webhook event ignored.', [
-                'event_type' => $eventType,
+    if ($eventType !== 'applicantReviewed') {
+        Log::info('Sumsub: Webhook event ignored.', [
+            'event_type' => $eventType,
+        ]);
+
+        return;
+    }
+
+    $externalUserId = $payload['externalUserId']
+        ?? $payload['applicant']['externalUserId']
+        ?? null;
+
+    $applicantId = $payload['applicantId']
+        ?? $payload['applicant']['id']
+        ?? null;
+
+    $reviewStatus = $payload['reviewStatus'] ?? null;
+
+    $reviewAnswer = $payload['reviewResult']['reviewAnswer']
+        ?? $payload['reviewAnswer']
+        ?? null;
+
+    if (! $externalUserId) {
+        Log::warning('Sumsub: Missing external user ID.', [
+            'applicant_id' => $applicantId,
+        ]);
+
+        return;
+    }
+
+    // Sumsub receives our Laravel user ID as its userId.
+    $user = User::query()->find($externalUserId);
+
+    if (! $user) {
+        Log::warning('Sumsub: No Laravel user matches external user ID.', [
+            'external_user_id' => $externalUserId,
+            'applicant_id' => $applicantId,
+        ]);
+
+        return;
+    }
+
+    DB::transaction(function () use (
+        $user,
+        $applicantId,
+        $reviewStatus,
+        $reviewAnswer,
+        $payload
+    ) {
+        $profile = $this->profiles->firstOrCreateForUser($user);
+
+        $changes = [];
+
+        if ($applicantId) {
+            $changes['sumsub_applicant_id'] = $applicantId;
+        }
+
+        // Do not change verification statuses until Sumsub has a final result.
+        if ($reviewStatus !== 'completed') {
+            Log::info('Sumsub: Review is not complete.', [
+                'user_id' => $user->id,
+                'review_status' => $reviewStatus,
             ]);
+
+            if ($changes !== []) {
+                $profile->forceFill($changes)->save();
+            }
 
             return;
         }
 
-        $externalUserId = $payload['externalUserId']
-            ?? $payload['applicant']['externalUserId']
-            ?? null;
+        if ($reviewAnswer === 'GREEN') {
+            $changes['identity_verification_status'] = 'verified';
+            $changes['identity_verified_at'] = now();
 
-        $applicantId = $payload['applicantId']
-            ?? $payload['applicant']['id']
-            ?? null;
+            /*
+             * This assumes the configured Sumsub level requires and
+             * successfully verifies selfie/liveness as well as identity.
+             * If it does not, do not mark selfie verification as verified.
+             */
+            $changes['selfie_verification_status'] = 'verified';
+            $changes['selfie_verified_at'] = now();
 
-        if (! $externalUserId) {
-            Log::warning('Sumsub: Webhook has no external user ID.', [
-                'event_type' => $eventType,
-                'applicant_id' => $applicantId,
-            ]);
+            $bankVerified = in_array(
+                $profile->bank_verification_status,
+                ['verified', 'approved'],
+                true
+            );
 
-            return;
-        }
+            $changes['status'] = $bankVerified ? 'approved' : 'pending';
+            $changes['rejection_reason'] = null;
 
-        $user = User::query()->find($externalUserId);
+            $user->forceFill([
+                'kyc_status' => $bankVerified ? 'approved' : 'pending',
+            ])->save();
 
-        if (! $user) {
-            Log::warning('Sumsub: User not found for webhook.', [
-                'external_user_id' => $externalUserId,
-                'applicant_id' => $applicantId,
-            ]);
-
-            return;
-        }
-
-        DB::transaction(function () use (
-            $payload,
-            $user,
-            $applicantId,
-            $eventType
-        ) {
-            $profile = $this->profiles->firstOrCreateForUser($user);
-
-            $previousStatus = $profile->status;
-            $previousIdentityStatus = $profile->identity_verification_status;
-
-            $reviewStatus = $payload['reviewStatus'] ?? null;
-            $reviewAnswer = $payload['reviewResult']['reviewAnswer'] 
-                ?? $payload['reviewAnswer']
-                ?? null;
-
-            $profileChanges = [];
-
-            if ($applicantId) {
-                $profileChanges['sumsub_applicant_id'] = $applicantId;
-            }
-
-            if (
-                $reviewStatus === 'completed'
-                && $reviewAnswer === 'GREEN'
-            ) {
-                $profileChanges['identity_verification_status'] = 'verified';
-                $profileChanges['identity_verified_at'] = now();
-
-                /*
-                 * Only mark selfie verification as verified if your
-                 * Sumsub level actually verifies the required selfie
-                 * or liveness check.
-                 *
-                 * Do not automatically approve the entire KYC profile
-                 * until the required bank verification is complete.
-                 */
-
-                $bankVerified = in_array(
-                    $profile->bank_verification_status,
-                    ['verified', 'approved'],
-                    true
-                );
-
-                $profileChanges['status'] = $bankVerified
-                    ? 'approved'
-                    : 'pending';
-
-                $profileChanges['rejection_reason'] = null;
-
-                $user->forceFill([
-                    'kyc_status' => $bankVerified
-                        ? 'approved'
-                        : 'pending',
-                ])->save();
-
-                Log::info('Sumsub: Identity review passed.', [
-                    'user_id' => $user->id,
-                    'applicant_id' => $applicantId,
-                    'bank_verified' => $bankVerified,
-                ]);
-            } elseif (
-                $reviewStatus === 'completed'
-                && $reviewAnswer === 'RED'
-            ) {
-                $reason = $payload['reviewResult']['clientComment']
-                    ?? $payload['reviewResult']['moderationComment']
-                    ?? 'Identity verification was rejected.';
-
-                $profileChanges['identity_verification_status'] = 'rejected';
-                $profileChanges['status'] = 'rejected';
-                $profileChanges['rejection_reason'] = $reason;
-
-                $user->forceFill([
-                    'kyc_status' => 'rejected',
-                ])->save();
-
-                Log::warning('Sumsub: Identity review rejected.', [
-                    'user_id' => $user->id,
-                    'applicant_id' => $applicantId,
-                    'reason' => $reason,
-                ]);
-            } else {
-                Log::info('Sumsub: Review is not final.', [
-                    'user_id' => $user->id,
-                    'applicant_id' => $applicantId,
-                    'review_status' => $reviewStatus,
-                    'review_answer' => $reviewAnswer,
-                ]);
-            }
-
-            if ($profileChanges !== []) {
-                $profile->forceFill($profileChanges)->save();
-            }
-
-            Log::info('KYC: Sumsub webhook processing completed.', [
+            Log::info('Sumsub: Identity review passed.', [
                 'user_id' => $user->id,
                 'applicant_id' => $applicantId,
-                'event_type' => $eventType,
-                'previous_status' => $previousStatus,
-                'new_status' => $profile->status,
-                'previous_identity_status' => $previousIdentityStatus,
-                'new_identity_status' => $profile->identity_verification_status,
+                'bank_verified' => $bankVerified,
             ]);
-        });
-    }
+        } elseif ($reviewAnswer === 'RED') {
+            $reason = $payload['reviewResult']['clientComment']
+                ?? $payload['reviewResult']['moderationComment']
+                ?? 'Identity verification was rejected.';
+
+            $changes['identity_verification_status'] = 'rejected';
+            $changes['status'] = 'rejected';
+            $changes['rejection_reason'] = $reason;
+
+            $user->forceFill([
+                'kyc_status' => 'rejected',
+            ])->save();
+
+            Log::warning('Sumsub: Identity review rejected.', [
+                'user_id' => $user->id,
+                'applicant_id' => $applicantId,
+                'reason' => $reason,
+            ]);
+        } else {
+            Log::info('Sumsub: Final review has no recognized answer.', [
+                'user_id' => $user->id,
+                'review_answer' => $reviewAnswer,
+            ]);
+        }
+
+        if ($changes !== []) {
+            $profile->forceFill($changes)->save();
+        }
+    });
+}
 
     /**
      * Store uploaded documents privately.
