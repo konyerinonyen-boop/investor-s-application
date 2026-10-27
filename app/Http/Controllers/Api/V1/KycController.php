@@ -6,12 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Kyc\SubmitKycRequest;
 use App\Services\KycService;
 use Illuminate\Http\Request;
-
+use App\Services\PaystackService;
+use Illuminate\Support\Facades\Log;
 class KycController extends Controller
 {
-    public function __construct(
-        private readonly KycService $kycService,
-    ) {}
+   public function __construct(
+    private readonly KycService $kycService,
+    private readonly PaystackService $paystack,
+) {}
 
     public function status(Request $request)
     {
@@ -63,4 +65,23 @@ class KycController extends Controller
             'data' => $result,
         ]);
     }
+
+    public function banks()
+{
+    try {
+        return response()->json([
+            'success' => true,
+            'data' => $this->paystack->listBanks(),
+        ]);
+    } catch (\Throwable $exception) {
+        Log::error('Unable to load Paystack banks.', [
+            'exception' => $exception::class,
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Unable to load banks right now. Please try again shortly.',
+        ], 503);
+    }
+}
 }

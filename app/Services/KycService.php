@@ -7,17 +7,19 @@ use App\Models\User;
 use App\Repositories\KycProfileRepository;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Validation\ValidationException;
 
 class KycService
 {
     public function __construct(
         private readonly KycProfileRepository $profiles,
         private readonly SumsubVerificationService $sumsub,
+        private readonly PaystackService $paystack,
     ) {}
 
     /**
-     * Return the user's current KYC status and profile.
+     * Return the user's current KYC status.
      */
     public function status(User $user): array
     {
@@ -28,88 +30,119 @@ class KycService
     }
 
     /**
-     * Save KYC details without submitting them for review.
+     * Save bank details only. Provider-owned fields cannot be edited here.
      */
-    public function update(User $user, array $data): KycProfile
-    {
-        $data = $this->storeUploadedDocuments($data);
+   
+public function update(User $user, array $data): KycProfile
+{
+    $bankCode = (string) $data['bank_code'];
+    $accountNumber = (string) $data['account_number'];
 
-        unset(
-            $data['id_document_front'],
-            $data['id_document_back']
-        );
+    $profile = $this->profiles->firstOrCreateForUser($user);
 
-        $profile = $this->profiles->updateForUser($user, $data);
+    if ($profile->status === 'verified') {
+        abort(409, 'Your KYC verification is already complete.');
+    }
 
-        Log::info('KYC: Profile details updated.', [
+    // Get the official bank list from Paystack.
+    try {
+        $banks = $this->paystack->listBanks();
+    } catch (\Throwable $exception) {
+        Log::error('Paystack: Could not retrieve bank list.', [
             'user_id' => $user->id,
-            'profile_id' => $profile->id,
+            'exception' => $exception::class,
         ]);
 
-        return $profile;
+        throw ValidationException::withMessages([
+            'bank_code' =>
+                'We could not load the bank information. Please try again shortly.',
+        ]);
     }
 
-    /**
-     * Save and submit KYC details for verification.
-     */
-    public function submit(User $user, array $data): KycProfile
-    {
-        $data = $this->storeUploadedDocuments($data);
+    // Do not trust a bank code just because the browser submitted it.
+    $selectedBank = collect($banks)->first(
+        fn (array $bank) => $bank['code'] === $bankCode
+    );
 
-        unset(
-            $data['id_document_front'],
-            $data['id_document_back']
+    if (! $selectedBank) {
+        throw ValidationException::withMessages([
+            'bank_code' =>
+                'Please select a valid bank from the bank list.',
+        ]);
+    }
+
+    // Save the selected bank and mark verification as pending.
+    $profile->forceFill([
+        'bank_name' => $selectedBank['name'],
+        'bank_code' => $selectedBank['code'],
+        'account_number' => $accountNumber,
+        'account_name' => null,
+        'bank_verification_status' => 'pending',
+        'bank_verification_reference' => null,
+        'bank_verified_at' => null,
+        'submitted_ip' => request()->ip(),
+    ])->save();
+
+    try {
+        $resolved = $this->paystack->resolveAccount(
+            $accountNumber,
+            $selectedBank['code'],
         );
+    } catch (\Throwable $exception) {
+        $profile->forceFill([
+            'bank_verification_status' => 'failed',
+            'account_name' => null,
+            'bank_verified_at' => null,
+        ])->save();
 
-        return DB::transaction(function () use ($user, $data) {
-            $profile = $this->profiles->firstOrCreateForUser($user);
+        Log::warning('Paystack: Bank account resolution failed.', [
+            'user_id' => $user->id,
+            'bank_code' => $selectedBank['code'],
+            'exception' => $exception::class,
+        ]);
 
-            $previousStatus = $profile->status;
-
-            $profile->fill($data);
-
-            $profile->forceFill([
-                'status' => 'pending',
-                'trigger_source' => 'resubmission',
-                'submitted_ip' => request()->ip(),
-                'identity_verification_status' => 'pending',
-                'identity_verified_at' => null,
-                'selfie_verification_status' => 'pending',
-                'selfie_verified_at' => null,
-                'rejection_reason' => null,
-            ])->save();
-
-            $user->forceFill([
-                'kyc_status' => 'pending',
-            ])->save();
-
-            Log::info('KYC: Submission saved.', [
-                'user_id' => $user->id,
-                'profile_id' => $profile->id,
-                'previous_status' => $previousStatus,
-                'new_status' => 'pending',
-            ]);
-
-            return $profile->fresh();
-        });
+        throw ValidationException::withMessages([
+            'account_number' =>
+                'Paystack could not verify this account. Check your bank and account number, then try again.',
+        ]);
     }
 
+    // Store only the account name returned by Paystack.
+    $profile->account_name = $resolved['account_name'];
+    $profile->bank_verification_status = 'verified';
+    $profile->bank_verified_at = now();
+
+    $identityVerified =
+        $profile->identity_verification_status === 'verified';
+
+    $profile->status = $identityVerified ? 'verified' : 'pending';
+    $profile->save();
+
+    $user->forceFill([
+        'kyc_status' => $profile->status,
+    ])->save();
+
+    Log::info('Paystack: Bank account verified.', [
+        'user_id' => $user->id,
+        'profile_id' => $profile->id,
+        'identity_verified' => $identityVerified,
+    ]);
+
+    return $profile->fresh();
+}
+
     /**
-     * Start a Sumsub verification session.
+     * Start or resume the Sumsub verification session.
      */
     public function startSumsub(User $user): array
     {
-        $profile = $this->profiles->firstOrCreateForUser(
-            $user,
-            ['status' => 'not_started']
-        );
+        $profile = $this->profiles->firstOrCreateForUser($user);
 
-        if ($profile->status === 'approved') {
-            Log::notice('Sumsub: Verification already approved.', [
-                'user_id' => $user->id,
-            ]);
-
-            abort(409, 'Your identity verification is already approved.');
+        if (
+            $profile->status === 'verified'
+            && $profile->identity_verification_status === 'verified'
+        ) {
+            abort(409, 'Your identity verification is already complete.');
         }
 
         Log::info('Sumsub: Starting verification.', [
@@ -119,11 +152,6 @@ class KycService
 
         try {
             $result = $this->sumsub->createAccessToken($user);
-
-            Log::info('Sumsub: Verification session created.', [
-                'user_id' => $user->id,
-                'expires_in' => $result['expires_in'] ?? null,
-            ]);
 
             return [
                 'token' => $result['token'],
@@ -141,170 +169,217 @@ class KycService
     }
 
     /**
-     * Process Sumsub webhook events.
+     * Process final Sumsub applicant review events.
+     *
+     * Sumsub controls the identity decision. This method never accepts
+     * an identity decision or rejection reason from the applicant/admin.
      */
-  
-/**
- * Process Sumsub review webhook events.
- */
-public function processSumsubWebhook(array $payload): void
-{
-    $eventType = $payload['type'] ?? 'unknown';
+    public function processSumsubWebhook(array $payload): void
+    {
+        $eventType = $payload['type'] ?? 'unknown';
 
-    if ($eventType !== 'applicantReviewed') {
-        Log::info('Sumsub: Webhook event ignored.', [
-            'event_type' => $eventType,
-        ]);
+        if ($eventType !== 'applicantReviewed') {
+            Log::info('Sumsub: Event ignored.', [
+                'event_type' => $eventType,
+            ]);
 
-        return;
-    }
-
-    $externalUserId = $payload['externalUserId']
-        ?? $payload['applicant']['externalUserId']
-        ?? null;
-
-    $applicantId = $payload['applicantId']
-        ?? $payload['applicant']['id']
-        ?? null;
-
-    $reviewStatus = $payload['reviewStatus'] ?? null;
-
-    $reviewAnswer = $payload['reviewResult']['reviewAnswer']
-        ?? $payload['reviewAnswer']
-        ?? null;
-
-    if (! $externalUserId) {
-        Log::warning('Sumsub: Missing external user ID.', [
-            'applicant_id' => $applicantId,
-        ]);
-
-        return;
-    }
-
-    // Sumsub receives our Laravel user ID as its userId.
-    $user = User::query()->find($externalUserId);
-
-    if (! $user) {
-        Log::warning('Sumsub: No Laravel user matches external user ID.', [
-            'external_user_id' => $externalUserId,
-            'applicant_id' => $applicantId,
-        ]);
-
-        return;
-    }
-
-    DB::transaction(function () use (
-        $user,
-        $applicantId,
-        $reviewStatus,
-        $reviewAnswer,
-        $payload
-    ) {
-        $profile = $this->profiles->firstOrCreateForUser($user);
-
-        $changes = [];
-
-        if ($applicantId) {
-            $changes['sumsub_applicant_id'] = $applicantId;
+            return;
         }
 
-        // Do not change verification statuses until Sumsub has a final result.
+        $applicant = $payload['applicant'] ?? [];
+
+        $externalUserId = $payload['externalUserId']
+            ?? $applicant['externalUserId']
+            ?? null;
+
+        $applicantId = $payload['applicantId']
+            ?? $applicant['id']
+            ?? null;
+
+        $reviewStatus = $payload['reviewStatus'] ?? null;
+
+        $reviewAnswer = $payload['reviewResult']['reviewAnswer']
+            ?? $payload['reviewAnswer']
+            ?? null;
+
+        if (! $externalUserId) {
+            Log::warning('Sumsub: Missing external user ID.', [
+                'applicant_id' => $applicantId,
+            ]);
+
+            return;
+        }
+
+        // SumsubVerificationService sends the Laravel user ID as userId.
+        $user = User::query()->find($externalUserId);
+
+        if (! $user) {
+            Log::warning('Sumsub: User not found for external user ID.', [
+                'external_user_id' => $externalUserId,
+                'applicant_id' => $applicantId,
+            ]);
+
+            return;
+        }
+
         if ($reviewStatus !== 'completed') {
-            Log::info('Sumsub: Review is not complete.', [
+            Log::info('Sumsub: Review is not final.', [
                 'user_id' => $user->id,
                 'review_status' => $reviewStatus,
             ]);
 
-            if ($changes !== []) {
-                $profile->forceFill($changes)->save();
+            if ($applicantId) {
+                $this->profiles->updateForUser($user, [
+                    'sumsub_applicant_id' => $applicantId,
+                ]);
             }
 
             return;
         }
 
-        if ($reviewAnswer === 'GREEN') {
-            $changes['identity_verification_status'] = 'verified';
-            $changes['identity_verified_at'] = now();
+        $notification = DB::transaction(function () use (
+            $user,
+            $applicantId,
+            $reviewAnswer,
+            $payload
+        ): ?array {
+            $profile = $this->profiles->firstOrCreateForUser($user);
 
-            /*
-             * This assumes the configured Sumsub level requires and
-             * successfully verifies selfie/liveness as well as identity.
-             * If it does not, do not mark selfie verification as verified.
-             */
-            $changes['selfie_verification_status'] = 'verified';
-            $changes['selfie_verified_at'] = now();
+            if ($applicantId) {
+                $profile->sumsub_applicant_id = $applicantId;
+            }
 
-            $bankVerified = in_array(
-                $profile->bank_verification_status,
-                ['verified', 'approved'],
-                true
-            );
+            if ($reviewAnswer === 'GREEN') {
+                $profile->identity_verification_status = 'verified';
+                $profile->identity_verified_at = now();
+                $profile->rejection_reason = null;
 
-            $changes['status'] = $bankVerified ? 'approved' : 'pending';
-            $changes['rejection_reason'] = null;
+                $profile->status = match ($profile->bank_verification_status) {
+                    'verified', 'approved' => 'verified',
+                    'rejected', 'failed' => 'rejected',
+                    default => 'pending',
+                };
 
-            $user->forceFill([
-                'kyc_status' => $bankVerified ? 'approved' : 'pending',
-            ])->save();
+                $user->forceFill([
+                    'kyc_status' => $profile->status,
+                ])->save();
 
-            Log::info('Sumsub: Identity review passed.', [
-                'user_id' => $user->id,
-                'applicant_id' => $applicantId,
-                'bank_verified' => $bankVerified,
-            ]);
-        } elseif ($reviewAnswer === 'RED') {
-            $reason = $payload['reviewResult']['clientComment']
-                ?? $payload['reviewResult']['moderationComment']
-                ?? 'Identity verification was rejected.';
+                $profile->save();
 
-            $changes['identity_verification_status'] = 'rejected';
-            $changes['status'] = 'rejected';
-            $changes['rejection_reason'] = $reason;
+                Log::info('Sumsub: Identity review passed.', [
+                    'user_id' => $user->id,
+                    'applicant_id' => $applicantId,
+                    'bank_status' => $profile->bank_verification_status,
+                    'overall_status' => $profile->status,
+                ]);
+
+                return null;
+            }
+
+            if ($reviewAnswer !== 'RED') {
+                Log::warning('Sumsub: Unknown final review answer.', [
+                    'user_id' => $user->id,
+                    'review_answer' => $reviewAnswer,
+                ]);
+
+                if ($applicantId) {
+                    $profile->save();
+                }
+
+                return null;
+            }
+
+            $reviewResult = $payload['reviewResult'] ?? [];
+
+            $reason = $reviewResult['clientComment']
+                ?? $reviewResult['moderationComment']
+                ?? null;
+
+            // Some Sumsub responses provide structured rejection labels.
+            if (! is_string($reason) || trim($reason) === '') {
+                $labels = $reviewResult['rejectLabels'] ?? [];
+
+                if (is_array($labels) && $labels !== []) {
+                    $reason = collect($labels)
+                        ->map(function ($label) {
+                            if (is_string($label)) {
+                                return $label;
+                            }
+
+                            if (is_array($label)) {
+                                return $label['name']
+                                    ?? $label['description']
+                                    ?? $label['label']
+                                    ?? null;
+                            }
+
+                            return null;
+                        })
+                        ->filter()
+                        ->unique()
+                        ->implode(', ');
+                }
+            }
+
+            $reason = is_string($reason) && trim($reason) !== ''
+                ? trim($reason)
+                : 'Sumsub rejected the identity verification. Please review the information and try again.';
+
+            $wasAlreadyRejected = $profile->identity_verification_status === 'rejected'
+                && $profile->rejection_reason === $reason;
+
+            $profile->identity_verification_status = 'rejected';
+            $profile->status = 'rejected';
+            $profile->rejection_reason = $reason;
 
             $user->forceFill([
                 'kyc_status' => 'rejected',
             ])->save();
+
+            $profile->save();
 
             Log::warning('Sumsub: Identity review rejected.', [
                 'user_id' => $user->id,
                 'applicant_id' => $applicantId,
                 'reason' => $reason,
             ]);
-        } else {
-            Log::info('Sumsub: Final review has no recognized answer.', [
+
+            if ($wasAlreadyRejected) {
+                return null;
+            }
+
+            return [
+                'email' => $user->email,
+                'name' => $user->first_name ?? 'Investor',
+                'reason' => $reason,
                 'user_id' => $user->id,
-                'review_answer' => $reviewAnswer,
-            ]);
-        }
+            ];
+        });
 
-        if ($changes !== []) {
-            $profile->forceFill($changes)->save();
-        }
-    });
-}
-
-    /**
-     * Store uploaded documents privately.
-     */
-    private function storeUploadedDocuments(array $data): array
-    {
-        foreach ([
-            'id_document_front' => 'id_document_path_front',
-            'id_document_back' => 'id_document_path_back',
-        ] as $fileKey => $pathKey) {
-            if (
-                isset($data[$fileKey])
-                && $data[$fileKey] instanceof \Illuminate\Http\UploadedFile
-            ) {
-                $data[$pathKey] = $data[$fileKey]->store(
-                    'kycDoc',
-                    'private'
+        // Send the notification after the database transaction commits.
+        if ($notification && ! empty($notification['email'])) {
+            try {
+                Mail::raw(
+                    "Hello {$notification['name']},\n\n"
+                    . "Sumsub was unable to verify your identity.\n\n"
+                    . "Reason provided by the verification process:\n"
+                    . $notification['reason']
+                    . "\n\nPlease sign in to your account to review your KYC status and follow the next steps.\n\n"
+                    . "FadaWebs",
+                    function ($message) use ($notification) {
+                        $message
+                            ->to($notification['email'])
+                            ->subject('Your identity verification result');
+                    }
                 );
-
-                unset($data[$fileKey]);
+            } catch (\Throwable $exception) {
+                // Email delivery failure must not undo Sumsub's decision.
+                Log::error('KYC: Rejection email could not be sent.', [
+                    'user_id' => $notification['user_id'],
+                    'exception' => $exception::class,
+                    'message' => $exception->getMessage(),
+                ]);
             }
         }
-
-        return $data;
     }
 }

@@ -3,7 +3,6 @@
 namespace App\Http\Requests\Kyc;
 
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
 class SubmitKycRequest extends FormRequest
 {
@@ -15,40 +14,18 @@ class SubmitKycRequest extends FormRequest
     public function rules(): array
     {
         return [
-            // Identity document details
-            'id_document_type' => [
+            // This is the bank selected from the dropdown.
+            // It is not a value the investor has to know.
+            'bank_code' => [
                 'required',
                 'string',
-                Rule::in([
-                    'national_id',
-                    'passport',
-                    'drivers_license',
-                    'voters_card',
-                ]),
+                'max:20',
             ],
 
-            'id_document_number' => [
+            'account_number' => [
                 'required',
                 'string',
-                'max:100',
-            ],
-
-            // Front of the document
-            'id_document_path_front' => [
-                'required',
-                'file',
-                'image',
-                'mimes:jpg,jpeg,png,webp',
-                'max:5120',
-            ],
-
-            // Back of the document
-            'id_document_path_back' => [
-                'required',
-                'file',
-                'image',
-                'mimes:jpg,jpeg,png,webp',
-                'max:5120',
+                'regex:/^[0-9]{10}$/',
             ],
         ];
     }
@@ -56,38 +33,14 @@ class SubmitKycRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'id_document_type.required' =>
-                'Please select your identity document type.',
+            'bank_code.required' =>
+                'Please select your bank.',
 
-            'id_document_type.in' =>
-                'The selected identity document type is not supported.',
+            'account_number.required' =>
+                'Please enter your account number.',
 
-            'id_document_number.required' =>
-                'Your identity document number is required.',
-
-            'id_document_path_front.required' =>
-                'Please upload the front of your identity document.',
-
-            'id_document_path_front.image' =>
-                'The front document must be an image.',
-
-            'id_document_path_front.mimes' =>
-                'The front document must be JPG, JPEG, PNG, or WEBP.',
-
-            'id_document_path_front.max' =>
-                'The front document cannot exceed 5MB.',
-
-            'id_document_path_back.required' =>
-                'Please upload the back of your identity document.',
-
-            'id_document_path_back.image' =>
-                'The back document must be an image.',
-
-            'id_document_path_back.mimes' =>
-                'The back document must be JPG, JPEG, PNG, or WEBP.',
-
-            'id_document_path_back.max' =>
-                'The back document cannot exceed 5MB.',
+            'account_number.regex' =>
+                'Your account number must contain exactly 10 digits.',
         ];
     }
 }

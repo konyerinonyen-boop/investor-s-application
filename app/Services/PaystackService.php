@@ -106,4 +106,53 @@ public function verify(string $reference): array
         ];
     }
 
+    
+public function listBanks(): array
+{
+    $secretKey = config('services.paystack.secret_key');
+
+    if (! $secretKey) {
+        throw new RuntimeException(
+            'Paystack secret key is not configured.'
+        );
+    }
+
+    $response = Http::withToken($secretKey)
+        ->acceptJson()
+        ->timeout(20)
+        ->get('https://api.paystack.co/bank', [
+            'country' => 'nigeria',
+            'perPage' => 100,
+            'page' => 1,
+        ]);
+
+    if (! $response->successful()) {
+        throw new RuntimeException(
+            'Unable to retrieve the supported banks from Paystack.'
+        );
+    }
+
+    $result = $response->json();
+
+    if (($result['status'] ?? false) !== true) {
+        throw new RuntimeException(
+            'Paystack did not return the bank list.'
+        );
+    }
+
+    return collect($result['data'] ?? [])
+        ->filter(fn (array $bank) =>
+            ! empty($bank['code'])
+            && ! empty($bank['name'])
+            && ($bank['active'] ?? true) === true
+        )
+        ->map(fn (array $bank) => [
+            'code' => (string) $bank['code'],
+            'name' => (string) $bank['name'],
+        ])
+        ->values()
+        ->all();
+}
+
+
 }

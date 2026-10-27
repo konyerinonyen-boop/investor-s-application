@@ -64,7 +64,15 @@ Route::post(
         Route::get('/opportunities/{id}', [OpportunityController::class, 'show']);
         
         Route::get('/kyc', [KycController::class, 'status']);
-        Route::post('/kyc/update', [KycController::class, 'update'])->middleware('kyc_verified');
+            Route::post(
+            '/kyc/sumsub/token',
+            [KycController::class, 'startSumsub']
+        )->middleware('throttle:10,1');
+
+        Route::get('/kyc/banks', [KycController::class, 'banks'])->middleware('throttle:30,1');
+
+        Route::post('/kyc/update', [KycController::class, 'update'])
+            ->middleware('throttle:10,1', 'kyc_verified');
     
         Route::post('/investments/equity', [InvestmentController::class, 'equity']);
         Route::post('/investments/{equity}/payment', [PaymentController::class, 'initializeInvestmentPayment']);
@@ -76,11 +84,6 @@ Route::post(
         PaymentController::class,
         'depositToWallet',
     ])->middleware('throttle:5,1');
-
-            Route::post(
-            '/kyc/sumsub/token',
-            [KycController::class, 'startSumsub']
-        )->middleware('throttle:10,1');
 
     });
        Route::post('webhook/{provider}', [PaymentController::class, 'webhook']);
