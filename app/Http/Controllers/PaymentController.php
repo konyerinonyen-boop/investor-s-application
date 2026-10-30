@@ -122,7 +122,7 @@ public function depositToWallet(
 ): JsonResponse {
     $validated = $request->validate([
         'amount' => ['required', 'numeric', 'min:100', 'decimal:0,2'],
-        'method' => ['required', 'string', 'in:paystack'],
+        'method' => ['required', 'string', 'in:korapay'],
     ]);
 
     try {

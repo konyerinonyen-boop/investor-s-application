@@ -1,24 +1,20 @@
 <?php
 
 namespace App\Services;
-
-use App\Actions\GenerateRepaymentSchedule;
 use App\Factories\PaymentGatwayFactory;
 use App\Models\EquityInvestment;
-use App\Models\Loan;
 use App\Models\Payment;
 use Brick\Math\BigDecimal;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
-use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 class PaymentService
 {
     public function __construct(
-        protected PaymentGatwayFactory $factory
+        protected PaymentGatwayFactory $factory,
+        protected KorapayWebhookService $korapayWebhookService
     ) {
     }
 
@@ -41,7 +37,7 @@ class PaymentService
              * The provider needs the investor's email.
              */
             'email' => $payment->user->email,
-            'full_name' => $payment->user->full_name,
+            'name' => $payment->user->full_name,
         ];
 
         /*
@@ -105,10 +101,10 @@ class PaymentService
     public function depositToWallet(
     Request $request,
     WalletPaymentService $walletPaymentService
-): \Illuminate\Http\JsonResponse {
+):JsonResponse {
     $validated = $request->validate([
         'amount' => ['required', 'numeric', 'gt:0', 'decimal:0,2'],
-        'method' => ['required', 'in:paystack'],
+       'method' => ['required', 'in:korapay'],
     ]);
 
     try {
@@ -154,344 +150,80 @@ class PaymentService
         );
     }
     
-   public function webhook(Request $request, ?string $provider = null): void
-{
-    if ($provider !== null && strtolower($provider) !== 'paystack') {
-        throw new RuntimeException('Unsupported payment webhook provider.');
+public function webhook(
+    Request $request,
+    string $provider,
+): JsonResponse {
+    try {
+        $this->korapayWebhookService->handle($request, $provider);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Webhook received and processed.',
+        ], 200);
+
+    } catch (Throwable $exception) {
+        report($exception);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Webhook processing failed. Reconciliation may be required.',
+        ], 500);
     }
-
-    /*
-     * 1. Verify Paystack signature against the raw request body.
-     */
-    $secret = config('services.paystack.secret_key');
-    $signature = $request->header('x-paystack-signature');
-
-    if (! $secret || ! $signature) {
-        throw new RuntimeException(
-            'Paystack webhook signature or secret is missing.'
-        );
-    }
-
-    $computedSignature = hash_hmac(
-        'sha512',
-        $request->getContent(),
-        $secret
-    );
-
-    if (! hash_equals($computedSignature, $signature)) {
-        throw new RuntimeException('Invalid Paystack signature.');
-    }
-
-    /*
-     * 2. Decode the webhook payload.
-     */
-    $payload = $request->json()->all();
-    $event = $payload['event'] ?? null;
-    $data = $payload['data'] ?? [];
-
-    if ($event !== 'charge.success') {
-        return;
-    }
-
-    $reference = $data['reference'] ?? null;
-
-    if (! $reference) {
-        throw new RuntimeException(
-            'Paystack transaction reference was not provided.'
-        );
-    }
-
-    /*
-     * 3. Process the payment atomically.
-     */
-    DB::transaction(function () use ($reference, $data) {
-        $payment = Payment::query()
-            ->where('provider_reference', $reference)
-            ->lockForUpdate()
-            ->first();
-
-        if (! $payment) {
-            throw new RuntimeException(
-                'Payment not found for Paystack reference.'
-            );
-        }
-
-        if ($payment->provider !== 'paystack') {
-            throw new RuntimeException(
-                'Payment provider does not match Paystack.'
-            );
-        }
-
-        if (($data['status'] ?? null) !== 'success') {
-            return;
-        }
-
-        /*
-         * 4. Validate currency.
-         */
-        $receivedCurrency = strtoupper(
-            (string) ($data['currency'] ?? '')
-        );
-
-        $expectedCurrency = strtoupper(
-            (string) $payment->currency
-        );
-
-        if ($receivedCurrency !== $expectedCurrency) {
-            throw new RuntimeException(
-                'Payment currency does not match.'
-            );
-        }
-
-        /*
-         * 5. Validate amount.
-         * Paystack reports NGN amounts in kobo.
-         */
-        $expectedMinorAmount = BigDecimal::of(
-            (string) $payment->amount
-        )->multipliedBy('100');
-
-        $receivedAmount = BigDecimal::of(
-            (string) ($data['amount'] ?? 0)
-        );
-
-        if (! $receivedAmount->isEqualTo($expectedMinorAmount)) {
-            throw new RuntimeException(
-                'Payment amount does not match.'
-            );
-        }
-
-        /*
-         * 6. Prevent duplicate processing.
-         */
-        if ($payment->status === 'successful') {
-            return;
-        }
-
-        /*
-         * 7. Handle wallet deposits.
-         */
-        if ($payment->purpose === 'wallet_deposit') {
-            if (
-                $payment->investment_id !== null ||
-                $payment->loan_id !== null ||
-                $payment->repayment_schedule_id !== null
-            ) {
-                throw new RuntimeException(
-                    'Wallet deposit payment has conflicting linked records.'
-                );
-            }
-
-            app(WalletService::class)->credit(
-                $payment->user,
-                (string) $payment->amount,
-                'deposit',
-                'wallet-deposit-' . $payment->id,
-                'Wallet deposit via Paystack',
-                $payment,
-                [
-                    'provider' => 'paystack',
-                    'provider_reference' => $payment->provider_reference,
-                ]
-            );
-
-            $payment->update([
-                'status' => 'successful',
-                'payload' => $data,
-            ]);
-
-            return;
-        }
-
-        /*
-         * 8. Ensure this payment belongs to exactly one supported
-         * investment or loan funding flow.
-         */
-        if (
-            $payment->loan_id !== null &&
-            $payment->investment_id !== null
-        ) {
-            throw new RuntimeException(
-                'Payment cannot be linked to both a loan and an investment.'
-            );
-        }
-
-        if (
-            $payment->loan_id === null &&
-            $payment->investment_id === null
-        ) {
-            throw new RuntimeException(
-                'Payment is not linked to a supported payment purpose.'
-            );
-        }
-
-        /*
-         * 9. Handle incoming loan funding.
-         */
-        if ($payment->loan_id !== null) {
-            $loan = Loan::query()
-                ->whereKey($payment->loan_id)
-                ->lockForUpdate()
-                ->first();
-
-            if (! $loan) {
-                throw new RuntimeException(
-                    'Loan associated with this payment was not found.'
-                );
-            }
-
-            if ((int) $loan->investor_id !== (int) $payment->user_id) {
-                throw new RuntimeException(
-                    'The payment user does not match the loan investor.'
-                );
-            }
-
-            /*
-             * If the loan is already funded, only accept the same
-             * funding reference as the original payment.
-             */
-            if ($loan->funded_at !== null) {
-                if (
-                    $loan->payment_reference !==
-                    $payment->provider_reference
-                ) {
-                    throw new RuntimeException(
-                        'Loan was already funded by another payment. Reconciliation is required.'
-                    );
-                }
-
-                $payment->update([
-                    'status' => 'successful',
-                    'payload' => $data,
-                ]);
-
-                app(GenerateRepaymentSchedule::class)
-                    ->handle($loan->fresh());
-
-                return;
-            }
-
-            /*
-             * A loan must be approved before funding.
-             * Throwing rolls back this database transaction.
-             */
-            if ($loan->status !== 'approved') {
-                throw new RuntimeException(
-                    'Payment succeeded but the loan is not approved. Reconciliation is required.'
-                );
-            }
-
-            $payment->update([
-                'status' => 'successful',
-                'payload' => $data,
-            ]);
-
-            $loan->update([
-                'status' => 'funded',
-                'funded_at' => now(),
-                'payment_reference' => $payment->provider_reference,
-            ]);
-
-            app(GenerateRepaymentSchedule::class)
-                ->handle($loan->fresh());
-
-            return;
-        }
-
-        /*
-         * 10. Handle equity investment payments.
-         */
-        $investment = EquityInvestment::query()
-            ->whereKey($payment->investment_id)
-            ->lockForUpdate()
-            ->first();
-
-        if (! $investment) {
-            throw new RuntimeException(
-                'Investment associated with this payment was not found.'
-            );
-        }
-
-        /*
-         * If the investment is already completed, repair the payment
-         * status without allocating units a second time.
-         */
-        if ($investment->status === 'completed') {
-            $payment->update([
-                'status' => 'successful',
-                'payload' => $data,
-            ]);
-
-            return;
-        }
-
-        /*
-         * Only pending investments can receive an allocation.
-         */
-        if ($investment->status !== 'pending_payment') {
-            throw new RuntimeException(
-                'Investment cannot be allocated in its current state. Reconciliation is required.'
-            );
-        }
-
-        /*
-         * 11. Lock the equity round and check available units.
-         */
-        $round = $investment->round()
-            ->lockForUpdate()
-            ->first();
-
-        if (! $round) {
-            throw new RuntimeException(
-                'Equity round was not found.'
-            );
-        }
-
-        $availableUnits = BigDecimal::of(
-            (string) $round->available_units
-        );
-
-        $investmentUnits = BigDecimal::of(
-            (string) $investment->units
-        );
-
-        /*
-         * If the provider has received payment but the units are no
-         * longer available, record the refund-required state.
-         */
-        if ($investmentUnits->isGreaterThan($availableUnits)) {
-            $payment->update([
-                'status' => 'successful',
-                'payload' => $data,
-            ]);
-
-            $investment->update([
-                'status' => 'refund_required',
-            ]);
-
-            return;
-        }
-
-        /*
-         * 12. Allocate the units and complete the investment.
-         */
-        $remainingUnits = $availableUnits
-            ->minus($investmentUnits)
-            ->toScale(6);
-
-        $round->forceFill([
-            'available_units' => $remainingUnits->__toString(),
-        ])->save();
-
-        $payment->update([
-            'status' => 'successful',
-            'payload' => $data,
-        ]);
-
-        $investment->update([
-            'status' => 'completed',
-            'payment_reference' => $payment->provider_reference,
-        ]);
-    });
 }
+
+
+public function withdrawFromWallet(
+    Request $request,
+    WalletWithdrawalService $withdrawalService,
+): JsonResponse {
+    $validated = $request->validate([
+        'amount' => ['required', 'numeric', 'min:100', 'decimal:0,2'],
+    ]);
+
+    try {
+        $withdrawal = $withdrawalService->request(
+            $request->user(),
+            (string) $validated['amount'],
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Withdrawal request recorded.',
+            'data' => [
+                'withdrawal' => $withdrawal,
+            ],
+        ], 201);
+    } catch (\RuntimeException $exception) {
+        if (
+            in_array($exception->getMessage(), [
+                'Insufficient wallet balance.',
+                'The minimum withdrawal amount is ₦100.',
+                'The withdrawal amount cannot have more than two decimal places.',
+                'You must verify and save your bank account before withdrawing.',
+            ], true)
+        ) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
+
+        report($exception);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Unable to process the withdrawal request.',
+        ], 500);
+    } catch (\Throwable $exception) {
+        report($exception);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Unable to process the withdrawal request.',
+        ], 500);
+    }
+}
+
+
 }

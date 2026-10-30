@@ -85,6 +85,13 @@ Route::post(
         'depositToWallet',
     ])->middleware('throttle:5,1');
 
+    
+Route::post('/wallet/withdraw', [
+    PaymentController::class,
+    'withdrawFromWallet',
+])->middleware('throttle:5,1');
+
+
     });
        Route::post('webhook/{provider}', [PaymentController::class, 'webhook']);
 

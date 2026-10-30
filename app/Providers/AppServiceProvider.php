@@ -16,6 +16,7 @@ use App\Models\Product;
 use App\Models\RepaymentSchedule;
 use App\Models\User;
 use App\Observers\AuditActivityObserver;
+use App\Observers\UserObserver;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
@@ -41,7 +42,9 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Schema::defaultStringLength(191);
-
+    // Automatically create a wallet whenever a user is created.
+        User::observe(UserObserver::class);
+        
         Gate::before(function (User $user, string $ability): ?bool {
             return $user->hasRole('super_admin') ? true : null;
         });

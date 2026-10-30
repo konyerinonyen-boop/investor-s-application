@@ -15,28 +15,27 @@ class WalletPaymentService
     }
 
     /**
-     * Initialize a Paystack deposit into the user's wallet.
+     * Initialize a Korapay wallet deposit.
+     *
+     * The wallet is not credited until the payment
+     * has been verified successfully.
      */
     public function initializeDeposit(
         User $user,
         string $amount,
         string $method
     ): array {
-        /*
-         * Wallet deposits must use Paystack because the wallet
-         * is credited automatically after verified payment.
-         */
-        if ($method !== 'paystack') {
+        if ($method !== 'korapay') {
             throw new InvalidArgumentException(
-                'Wallet deposits currently support Paystack only.'
+                'Wallet deposits must use Korapay.'
             );
         }
 
-        /*
-         * Create a pending payment specifically for a wallet deposit.
-         * This does not add money to the wallet yet.
-         */
-        $payment = DB::transaction(function () use ($user, $amount, $method) {
+        $payment = DB::transaction(function () use (
+            $user,
+            $amount,
+            $method
+        ) {
             return Payment::create([
                 'user_id' => $user->id,
                 'purpose' => 'wallet_deposit',
@@ -52,15 +51,9 @@ class WalletPaymentService
             ]);
         });
 
-        /*
-         * Call Paystack after the database transaction finishes.
-         * This avoids holding database locks while contacting Paystack.
-         */
         try {
-            $gateway = $this->paymentService->initializeProviderPayment(
-                $payment,
-                $method
-            );
+            $gateway = $this->paymentService
+                ->initializeProviderPayment($payment, $method);
 
             return [
                 'payment' => $payment->fresh(),
