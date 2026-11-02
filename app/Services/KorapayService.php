@@ -53,13 +53,17 @@ class KorapayService implements PaymantGateWayInterface
         $reference = $data['reference']
             ?? 'KORA-' . Str::upper(Str::random(24));
 
-        $payload = [
+            $payload = [
             'amount' => (int) $amount,
             'currency' => 'NGN',
             'reference' => $reference,
+
+            'merchant_bears_cost' => false,
+
             'customer' => [
                 'email' => $email,
             ],
+
             'narration' => 'FadaWebs wallet deposit',
             'metadata' => [
                 'payment_reference' => $reference,
