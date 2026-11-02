@@ -9,9 +9,11 @@ use App\Http\Controllers\Api\V1\SumsubWebhookController;
 use App\Http\Controllers\Auth\ResendVerificationEmailController;
 use App\Http\Controllers\Auth\VerifyEmailController;
 use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\WalletWithdrawalController;
 use App\Http\Middleware\LogApiActivity;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+
 
 
 
@@ -87,8 +89,8 @@ Route::post(
 
     
 Route::post('/wallet/withdraw', [
-    PaymentController::class,
-    'withdrawFromWallet',
+    WalletWithdrawalController::class,
+    'store',
 ])->middleware('throttle:5,1');
 
 

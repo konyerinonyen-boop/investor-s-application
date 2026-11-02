@@ -211,4 +211,88 @@ class KorapayService implements PaymantGateWayInterface
             . rawurlencode($reference)
         )->throw()->json();
     }
+
+    /**
+ * Retrieve banks supported for Nigerian Korapay payouts.
+ */
+    public function listBanks(): array
+    {
+        $response = $this->client()
+            ->get(
+                'https://api.korapay.com/merchant/api/v1/misc/banks',
+                ['countryCode' => 'NG']
+            )
+            ->throw();
+
+        $result = $response->json();
+
+        if (
+            ($result['status'] ?? false) !== true ||
+            ! is_array($result['data'] ?? null)
+        ) {
+            throw new RuntimeException(
+                'Korapay did not return a valid bank list.'
+            );
+        }
+
+        return collect($result['data'])
+            ->filter(fn (array $bank) =>
+                ! empty($bank['name']) &&
+                ! empty($bank['code'])
+            )
+            ->map(fn (array $bank) => [
+                'name' => (string) $bank['name'],
+                'code' => (string) $bank['code'],
+            ])
+            ->values()
+            ->all();
+    }
+
+        public function resolveAccount(
+        string $accountNumber,
+        string $bankCode
+    ): array {
+        if (! preg_match('/^\d{10}$/', $accountNumber)) {
+            throw new RuntimeException(
+                'A valid 10-digit account number is required.'
+            );
+        }
+
+        if (trim($bankCode) === '') {
+            throw new RuntimeException(
+                'A valid Korapay bank code is required.'
+            );
+        }
+
+        $response = $this->client()
+            ->post(
+                'https://api.korapay.com/merchant/api/v1/misc/banks/resolve',
+                [
+                    'bank' => $bankCode,
+                    'account' => $accountNumber,
+                    'currency' => 'NGN',
+                ]
+            )
+            ->throw();
+
+        $result = $response->json();
+
+        if (
+            ($result['status'] ?? false) !== true ||
+            empty($result['data']['account_name'])
+        ) {
+            throw new RuntimeException(
+                'Korapay could not verify this bank account.'
+            );
+        }
+
+        return [
+            'account_name' => $result['data']['account_name'],
+            'account_number' => $result['data']['account_number']
+                ?? $accountNumber,
+            'bank_name' => $result['data']['bank_name'] ?? null,
+            'bank_code' => $result['data']['bank_code'] ?? $bankCode,
+        ];
+    }
+
 }

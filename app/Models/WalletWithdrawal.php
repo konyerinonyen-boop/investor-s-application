@@ -22,6 +22,8 @@ class WalletWithdrawal extends Model
         'provider_response',
         'failure_reason',
         'transferred_at',
+        'fee',
+        'total_debit',
     ];
 
     protected function casts(): array
@@ -30,6 +32,8 @@ class WalletWithdrawal extends Model
             'amount' => 'decimal:2',
             'provider_response' => 'array',
             'transferred_at' => 'datetime',
+            'fee' => 'decimal:2',
+            'total_debit' => 'decimal:2',
         ];
     }
 

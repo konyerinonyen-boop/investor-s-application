@@ -41,6 +41,9 @@ return [
 
  'korapay' => [
     'secret_key' => env('KORAPAY_SECRET_KEY'),
+    // Set this to the actual fee confirmed for your merchant account.
+    'withdrawal_fee' => env('KORAPAY_WITHDRAWAL_FEE_NGN'),
+
  ],
  
    

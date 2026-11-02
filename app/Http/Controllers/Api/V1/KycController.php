@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Kyc\SubmitKycRequest;
+use App\Services\KorapayService;
 use App\Services\KycService;
 use Illuminate\Http\Request;
 use App\Services\PaystackService;
@@ -12,7 +13,7 @@ class KycController extends Controller
 {
    public function __construct(
     private readonly KycService $kycService,
-    private readonly PaystackService $paystack,
+    private readonly KorapayService $korapay,
 ) {}
 
     public function status(Request $request)
@@ -39,19 +40,19 @@ class KycController extends Controller
         ]);
     }
 
-    public function submit(SubmitKycRequest $request)
-    {
-        $profile = $this->kycService->submit(
-            $request->user(),
-            $request->validated()
-        );
+    // public function submit(SubmitKycRequest $request)
+    // {
+    //     $profile = $this->kycService->submit(
+    //         $request->user(),
+    //         $request->validated()
+    //     );
 
-        return response()->json([
-            'success' => true,
-            'message' => 'KYC submission saved successfully.',
-            'data' => $profile,
-        ], 202);
-    }
+    //     return response()->json([
+    //         'success' => true,
+    //         'message' => 'KYC submission saved successfully.',
+    //         'data' => $profile,
+    //     ], 202);
+    // }
 
     public function startSumsub(Request $request)
     {
@@ -66,15 +67,15 @@ class KycController extends Controller
         ]);
     }
 
-    public function banks()
+public function banks()
 {
     try {
         return response()->json([
             'success' => true,
-            'data' => $this->paystack->listBanks(),
+            'data' => $this->korapay->listBanks(),
         ]);
     } catch (\Throwable $exception) {
-        Log::error('Unable to load Paystack banks.', [
+        Log::error('Unable to load Korapay banks.', [
             'exception' => $exception::class,
         ]);
 

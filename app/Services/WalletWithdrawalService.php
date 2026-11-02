@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\KycProfile;
 use App\Models\User;
 use App\Models\WalletWithdrawal;
+use Brick\Math\BigDecimal;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -20,17 +21,39 @@ class WalletWithdrawalService
 
     public function request(User $user, string $amount): WalletWithdrawal
     {
-        if (! is_numeric($amount) || (float) $amount < 100) {
+        // Accept only positive naira amounts with at most 2 decimal places.
+        if (! preg_match('/^\d+(?:\.\d{1,2})?$/', $amount)) {
+            throw new RuntimeException(
+                'Enter a valid withdrawal amount with no more than two decimal places.'
+            );
+        }
+
+        $withdrawalAmount = BigDecimal::of($amount)->toScale(2);
+
+        if ($withdrawalAmount->isLessThan('100.00')) {
             throw new RuntimeException(
                 'The minimum withdrawal amount is ₦100.'
             );
         }
 
-        if (round((float) $amount, 2) !== (float) $amount) {
+        // Read the fee from config/services.php, not from user input.
+        $configuredFee = (string) config('services.korapay.withdrawal_fee');
+
+        if (! preg_match('/^\d+(?:\.\d{1,2})?$/', $configuredFee)) {
             throw new RuntimeException(
-                'The withdrawal amount cannot have more than two decimal places.'
+                'The Korapay withdrawal fee is not configured correctly.'
             );
         }
+
+        $fee = BigDecimal::of($configuredFee)->toScale(2);
+
+        if ($fee->isLessThan('0.00')) {
+            throw new RuntimeException(
+                'The Korapay withdrawal fee cannot be negative.'
+            );
+        }
+
+        $totalDebit = $withdrawalAmount->plus($fee)->toScale(2);
 
         $profile = KycProfile::query()
             ->where('user_id', $user->id)
@@ -46,17 +69,22 @@ class WalletWithdrawalService
             );
         }
 
-        // Save and debit atomically before calling the external provider.
+        // Save the withdrawal and deduct amount + fee atomically.
+        // WalletService checks the available balance under a database lock.
         $withdrawal = DB::transaction(function () use (
             $user,
             $profile,
-            $amount
+            $withdrawalAmount,
+            $fee,
+            $totalDebit
         ) {
             $reference = 'KORA-WD-' . Str::upper(Str::random(20));
 
             $withdrawal = WalletWithdrawal::create([
                 'user_id' => $user->id,
-                'amount' => number_format((float) $amount, 2, '.', ''),
+                'amount' => (string) $withdrawalAmount,
+                'fee' => (string) $fee,
+                'total_debit' => (string) $totalDebit,
                 'currency' => 'NGN',
                 'bank_name' => $profile->bank_name,
                 'bank_code' => $profile->bank_code,
@@ -68,14 +96,17 @@ class WalletWithdrawalService
 
             $transaction = $this->walletService->debit(
                 $user,
-                number_format((float) $amount, 2, '.', ''),
+                (string) $totalDebit,
                 'withdrawal',
                 'wallet-withdrawal-' . $withdrawal->id,
-                'Wallet withdrawal to bank account',
+                'Wallet withdrawal including Korapay fee',
                 $withdrawal,
                 [
                     'provider' => 'korapay',
                     'transfer_reference' => $reference,
+                    'withdrawal_amount' => (string) $withdrawalAmount,
+                    'withdrawal_fee' => (string) $fee,
+                    'total_debit' => (string) $totalDebit,
                 ]
             );
 
@@ -87,9 +118,11 @@ class WalletWithdrawalService
         });
 
         /*
-         * Do not automatically refund or retry if this request throws:
-         * the provider might have received it despite a timeout.
-         * Reconcile the transfer reference before taking further action.
+         * Send only the requested withdrawal amount to Korapay.
+         * The fee is retained by the platform to cover the payout charge.
+         *
+         * If the request outcome is uncertain, do not refund or retry
+         * until the transfer reference has been reconciled with Korapay.
          */
         try {
             $result = $this->korapay->disburse([
@@ -107,7 +140,6 @@ class WalletWithdrawalService
         } catch (Throwable $exception) {
             report($exception);
 
-            // Keep it processing until the same reference is reconciled.
             $withdrawal->update([
                 'failure_reason' =>
                     'Payout submission outcome is unconfirmed. Reconciliation is required.',

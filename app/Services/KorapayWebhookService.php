@@ -254,40 +254,61 @@ class KorapayWebhookService
 
                 return;
             }
+          
 
-            // A failed transfer must return the previously debited
-            // amount to the investor's wallet exactly once.
-            $debit = $withdrawal->walletTransaction;
+// A failed transfer must return the full amount deducted
+// from the investor's wallet exactly once.
+$debit = $withdrawal->walletTransaction;
 
-            if (
-                ! $debit ||
-                $debit->direction !== 'debit' ||
-                (int) $debit->wallet->user_id !== (int) $withdrawal->user_id
-            ) {
-                throw new RuntimeException(
-                    'Withdrawal debit transaction is missing or invalid. Manual reconciliation is required.'
-                );
-            }
+if (
+    ! $debit ||
+    $debit->direction !== 'debit' ||
+    (int) $debit->wallet?->user_id !== (int) $withdrawal->user_id
+) {
+    throw new RuntimeException(
+        'Withdrawal debit transaction is missing or invalid. Manual reconciliation is required.'
+    );
+}
 
-            $this->walletService->credit(
-                $withdrawal->user,
-                (string) $withdrawal->amount,
-                'withdrawal_refund',
-                'wallet-withdrawal-refund-' . $withdrawal->id,
-                'Refund for failed Korapay withdrawal',
-                $withdrawal,
-                [
-                    'provider' => 'korapay',
-                    'transfer_reference' => $reference,
-                ]
+        // New withdrawals have total_debit.
+        // Older withdrawals may have 0 because the fee columns
+        // were added after those records were created.
+        $totalDebit = BigDecimal::of(
+            (string) ($withdrawal->total_debit ?: $withdrawal->amount)
+        );
+
+        // Confirm the original wallet debit matches the refund amount.
+        if (! BigDecimal::of((string) $debit->amount)->isEqualTo($totalDebit)) {
+            throw new RuntimeException(
+                'Withdrawal debit amount does not match the expected refund. Manual reconciliation is required.'
             );
+        }
 
-            $withdrawal->update([
-                'status' => 'failed',
-                'provider_response' => $data,
-                'failure_reason' => 'Korapay transfer failed. Amount refunded to wallet.',
-            ]);
-        }, 3);
+        $this->walletService->credit(
+            $withdrawal->user,
+            (string) $totalDebit,
+            'withdrawal_refund',
+            'wallet-withdrawal-refund-' . $withdrawal->id,
+            'Full refund for failed Korapay withdrawal, including fee',
+            $withdrawal,
+            [
+                'provider' => 'korapay',
+                'transfer_reference' => $reference,
+                'withdrawal_amount' => (string) $withdrawal->amount,
+                'withdrawal_fee' => (string) $withdrawal->fee,
+                'refunded_amount' => (string) $totalDebit,
+            ]
+        );
+
+        $withdrawal->update([
+            'status' => 'failed',
+            'provider_response' => $data,
+            'failure_reason' => 'Korapay transfer failed. Full wallet debit, including fee, refunded.',
+        ]);
+
+                },
+        
+        3);
     }
 
     private function validateAmountAndCurrency(
@@ -317,4 +338,5 @@ class KorapayWebhookService
             );
         }
     }
+    
 }
