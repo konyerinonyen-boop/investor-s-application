@@ -76,8 +76,15 @@ public function banks()
         ]);
     } catch (\Throwable $exception) {
         Log::error('Unable to load Korapay banks.', [
-            'exception' => $exception::class,
-        ]);
+    'exception' => $exception::class,
+    'message' => $exception->getMessage(),
+    'http_status' => $exception instanceof \Illuminate\Http\Client\RequestException
+        ? $exception->response->status()
+        : null,
+    'response' => $exception instanceof \Illuminate\Http\Client\RequestException
+        ? $exception->response->body()
+        : null,
+]);
 
         return response()->json([
             'success' => false,

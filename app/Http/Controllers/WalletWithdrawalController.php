@@ -18,9 +18,13 @@ class WalletWithdrawalController extends Controller
             'amount' => [
                 'required',
                 'numeric',
-                'min:100',
+                'min:1000',
+                'max:10000000',
                 'decimal:0,2',
             ],
+        ], [
+            'amount.min' => 'The minimum withdrawal amount is ₦1,000.',
+            'amount.max' => 'The maximum withdrawal amount is ₦10,000,000.',
         ]);
 
         try {
@@ -40,7 +44,9 @@ class WalletWithdrawalController extends Controller
         } catch (RuntimeException $exception) {
             $knownErrors = [
                 'Insufficient wallet balance.',
-                'The minimum withdrawal amount is ₦100.',
+                'The minimum withdrawal amount is ₦1,000.',
+                'The maximum withdrawal amount is ₦10,000,000.',
+                'Enter a valid withdrawal amount with no more than two decimal places.',
                 'The withdrawal amount cannot have more than two decimal places.',
                 'You must verify and save your bank account before withdrawing.',
             ];

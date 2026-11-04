@@ -4,8 +4,10 @@ namespace App\Services;
 
 use App\Models\KycProfile;
 use App\Models\User;
+use App\Models\WalletTransaction;
 use App\Models\WalletWithdrawal;
 use Brick\Math\BigDecimal;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -13,6 +15,10 @@ use Throwable;
 
 class WalletWithdrawalService
 {
+    private const MINIMUM_WITHDRAWAL = '1000.00';
+
+    private const MAXIMUM_WITHDRAWAL = '10000000.00';
+
     public function __construct(
         protected WalletService $walletService,
         protected KorapayService $korapay,
@@ -21,7 +27,6 @@ class WalletWithdrawalService
 
     public function request(User $user, string $amount): WalletWithdrawal
     {
-        // Accept only positive naira amounts with at most 2 decimal places.
         if (! preg_match('/^\d+(?:\.\d{1,2})?$/', $amount)) {
             throw new RuntimeException(
                 'Enter a valid withdrawal amount with no more than two decimal places.'
@@ -30,13 +35,18 @@ class WalletWithdrawalService
 
         $withdrawalAmount = BigDecimal::of($amount)->toScale(2);
 
-        if ($withdrawalAmount->isLessThan('100.00')) {
+        if ($withdrawalAmount->isLessThan(self::MINIMUM_WITHDRAWAL)) {
             throw new RuntimeException(
-                'The minimum withdrawal amount is ₦100.'
+                'The minimum withdrawal amount is ₦1,000.'
             );
         }
 
-        // Read the fee from config/services.php, not from user input.
+        if ($withdrawalAmount->isGreaterThan(self::MAXIMUM_WITHDRAWAL)) {
+            throw new RuntimeException(
+                'The maximum withdrawal amount is ₦10,000,000.'
+            );
+        }
+
         $configuredFee = (string) config('services.korapay.withdrawal_fee');
 
         if (! preg_match('/^\d+(?:\.\d{1,2})?$/', $configuredFee)) {
@@ -69,8 +79,7 @@ class WalletWithdrawalService
             );
         }
 
-        // Save the withdrawal and deduct amount + fee atomically.
-        // WalletService checks the available balance under a database lock.
+        // Create the withdrawal and debit the wallet atomically.
         $withdrawal = DB::transaction(function () use (
             $user,
             $profile,
@@ -117,13 +126,6 @@ class WalletWithdrawalService
             return $withdrawal->fresh();
         });
 
-        /*
-         * Send only the requested withdrawal amount to Korapay.
-         * The fee is retained by the platform to cover the payout charge.
-         *
-         * If the request outcome is uncertain, do not refund or retry
-         * until the transfer reference has been reconciled with Korapay.
-         */
         try {
             $result = $this->korapay->disburse([
                 'amount' => $withdrawal->amount,
@@ -137,15 +139,149 @@ class WalletWithdrawalService
             $withdrawal->update([
                 'provider_response' => $result,
             ]);
+
+        } catch (RequestException $exception) {
+            report($exception);
+
+            if ($this->isDefiniteAmountRejection($exception)) {
+                try {
+                    $this->refundRejectedWithdrawal($withdrawal);
+
+                } catch (Throwable $refundException) {
+                    report($refundException);
+
+                    $withdrawal->update([
+                        'failure_reason' =>
+                            'Korapay rejected the transfer, but the automatic refund failed. Manual reconciliation is required.',
+                    ]);
+                }
+
+                return $withdrawal->fresh();
+            }
+
+            // Other HTTP errors may have an uncertain outcome.
+            $withdrawal->update([
+                'failure_reason' =>
+                    'Korapay returned an HTTP error. Transfer reconciliation is required before retrying or refunding.',
+            ]);
+
         } catch (Throwable $exception) {
             report($exception);
 
+            // Network errors and unexpected failures are not proof
+            // that Korapay did not process the transfer.
             $withdrawal->update([
                 'failure_reason' =>
-                    'Payout submission outcome is unconfirmed. Reconciliation is required.',
+                    'Payout submission outcome is unconfirmed. Reconciliation is required before retrying or refunding.',
             ]);
         }
 
         return $withdrawal->fresh();
+    }
+
+    /**
+     * Recognise Korapay's explicit minimum/maximum transfer rejection.
+     */
+    private function isDefiniteAmountRejection(
+        RequestException $exception
+    ): bool {
+        $response = $exception->response;
+
+        if ($response->status() !== 409) {
+            return false;
+        }
+
+        $message = strtolower(
+            (string) (
+                $response->json('message')
+                ?? $response->body()
+            )
+        );
+
+        return str_contains(
+            $message,
+            'between ngn 1000 and ngn 10000000'
+        );
+    }
+
+    /**
+     * Refund a definitively rejected withdrawal exactly once.
+     */
+    private function refundRejectedWithdrawal(
+        WalletWithdrawal $withdrawal
+    ): void {
+        DB::transaction(function () use ($withdrawal) {
+            $w = WalletWithdrawal::query()
+                ->whereKey($withdrawal->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($w->status === 'failed') {
+                return;
+            }
+
+            if ($w->status !== 'processing') {
+                throw new RuntimeException(
+                    'Withdrawal is not processing. Refund was not attempted.'
+                );
+            }
+
+            $debit = WalletTransaction::query()
+                ->whereKey($w->wallet_transaction_id)
+                ->firstOrFail();
+
+            if (
+                $debit->direction !== 'debit' ||
+                $debit->type !== 'withdrawal' ||
+                $debit->reference !== 'wallet-withdrawal-' . $w->id ||
+                (int) $debit->source_id !== (int) $w->id ||
+                ! BigDecimal::of((string) $debit->amount)
+                    ->isEqualTo((string) $w->total_debit)
+            ) {
+                throw new RuntimeException(
+                    'Original withdrawal debit does not match. Refund was not attempted.'
+                );
+            }
+
+            $refundReference = 'wallet-withdrawal-refund-' . $w->id;
+
+            $existingRefund = WalletTransaction::query()
+                ->where('reference', $refundReference)
+                ->first();
+
+            if ($existingRefund) {
+                if (
+                    $existingRefund->direction !== 'credit' ||
+                    $existingRefund->type !== 'withdrawal_refund' ||
+                    ! BigDecimal::of((string) $existingRefund->amount)
+                        ->isEqualTo((string) $w->total_debit)
+                ) {
+                    throw new RuntimeException(
+                        'An existing refund does not match this withdrawal.'
+                    );
+                }
+            } else {
+                $this->walletService->credit(
+                    $w->user,
+                    (string) $w->total_debit,
+                    'withdrawal_refund',
+                    $refundReference,
+                    'Refund for rejected Korapay withdrawal #' . $w->id,
+                    $w,
+                    [
+                        'provider' => 'korapay',
+                        'transfer_reference' => $w->transfer_reference,
+                        'original_debit' => (string) $w->total_debit,
+                        'reason' => 'Korapay rejected the transfer amount.',
+                    ]
+                );
+            }
+
+            $w->update([
+                'status' => 'failed',
+                'failure_reason' =>
+                    'Korapay rejected the transfer amount. The full wallet debit, including the fee, was refunded.',
+            ]);
+        }, 3);
     }
 }

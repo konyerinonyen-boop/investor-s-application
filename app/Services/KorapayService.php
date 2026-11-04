@@ -9,6 +9,9 @@ use RuntimeException;
 
 class KorapayService implements PaymantGateWayInterface
 {
+    /**
+     * Authenticate requests that require the Korapay secret key.
+     */
     private function client()
     {
         $secret = config('services.korapay.secret_key');
@@ -25,8 +28,26 @@ class KorapayService implements PaymantGateWayInterface
     }
 
     /**
+     * Authenticate requests that require the Korapay public key.
+     */
+    private function publicClient()
+    {
+        $public = config('services.korapay.public_key');
+
+        if (! is_string($public) || trim($public) === '') {
+            throw new RuntimeException(
+                'Korapay public key is not configured.'
+            );
+        }
+
+        return Http::acceptJson()
+            ->withToken($public)
+            ->timeout(30);
+    }
+
+    /**
      * Start a Korapay checkout for a wallet deposit.
-     * Korapay expects whole-naira NGN amounts for checkout.
+     * Amount must be a positive whole-naira value.
      */
     public function initialize(array $data): array
     {
@@ -53,17 +74,14 @@ class KorapayService implements PaymantGateWayInterface
         $reference = $data['reference']
             ?? 'KORA-' . Str::upper(Str::random(24));
 
-            $payload = [
+        $payload = [
             'amount' => (int) $amount,
             'currency' => 'NGN',
             'reference' => $reference,
-
             'merchant_bears_cost' => false,
-
             'customer' => [
                 'email' => $email,
             ],
-
             'narration' => 'FadaWebs wallet deposit',
             'metadata' => [
                 'payment_reference' => $reference,
@@ -128,9 +146,6 @@ class KorapayService implements PaymantGateWayInterface
 
     /**
      * Send a bank payout through Korapay.
-     *
-     * Amount is expressed in naira, e.g. "15000.00".
-     * The caller must save the withdrawal and unique reference first.
      */
     public function disburse(array $data): array
     {
@@ -195,8 +210,8 @@ class KorapayService implements PaymantGateWayInterface
     }
 
     /**
-     * Query a payout after a response timeout or uncertain result.
-     * Do not retry the disbursement until this result is checked.
+     * Verify a payout after a response timeout or uncertain result.
+     * Check this result before attempting another disbursement.
      */
     public function verifyDisbursement(string $reference): array
     {
@@ -213,20 +228,19 @@ class KorapayService implements PaymantGateWayInterface
     }
 
     /**
- * Retrieve banks supported for Nigerian Korapay payouts.
- */
+     * Retrieve banks supported for Nigerian Korapay payouts.
+     */
     public function listBanks(): array
     {
-        $response = $this->client()
-            ->get(
-                'https://api.korapay.com/merchant/api/v1/misc/banks',
-                ['countryCode' => 'NG']
-            )
-            ->throw();
+        $response = $this->publicClient()->get(
+            'https://api.korapay.com/merchant/api/v1/misc/banks',
+            ['countryCode' => 'NG']
+        )->throw();
 
         $result = $response->json();
 
         if (
+            ! is_array($result) ||
             ($result['status'] ?? false) !== true ||
             ! is_array($result['data'] ?? null)
         ) {
@@ -248,7 +262,10 @@ class KorapayService implements PaymantGateWayInterface
             ->all();
     }
 
-        public function resolveAccount(
+    /**
+     * Resolve a Nigerian bank account.
+     */
+    public function resolveAccount(
         string $accountNumber,
         string $bankCode
     ): array {
@@ -264,20 +281,19 @@ class KorapayService implements PaymantGateWayInterface
             );
         }
 
-        $response = $this->client()
-            ->post(
-                'https://api.korapay.com/merchant/api/v1/misc/banks/resolve',
-                [
-                    'bank' => $bankCode,
-                    'account' => $accountNumber,
-                    'currency' => 'NGN',
-                ]
-            )
-            ->throw();
+        $response = $this->publicClient()->post(
+        'https://api.korapay.com/merchant/api/v1/misc/banks/resolve',
+        [
+            'bank' => $bankCode,
+            'account' => $accountNumber,
+            'currency' => 'NGN',
+        ]
+    )->throw();
 
         $result = $response->json();
 
         if (
+            ! is_array($result) ||
             ($result['status'] ?? false) !== true ||
             empty($result['data']['account_name'])
         ) {
@@ -294,5 +310,4 @@ class KorapayService implements PaymantGateWayInterface
             'bank_code' => $result['data']['bank_code'] ?? $bankCode,
         ];
     }
-
 }

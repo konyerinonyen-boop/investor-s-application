@@ -15,7 +15,7 @@ class KycService
     public function __construct(
         private readonly KycProfileRepository $profiles,
         private readonly SumsubVerificationService $sumsub,
-        private readonly PaystackService $paystack,
+        private readonly KorapayService $korapay,
     ) {}
 
     /**
@@ -34,90 +34,118 @@ class KycService
      */
    
 
-public function update(User $user, array $data): KycProfile
-{
-    $profile = $this->profiles->firstOrCreateForUser($user);
 
-    // Identity verification must be completed before bank verification.
-    if ($profile->identity_verification_status !== 'verified') {
-        throw ValidationException::withMessages([
-            'identity' => 'Complete Sumsub identity verification before submitting your bank account.',
-        ]);
-    }
+    public function update(User $user, array $data): KycProfile
+    {
+        $profile = $this->profiles->firstOrCreateForUser($user);
 
-    if ($profile->status === 'verified') {
-        abort(409, 'Your KYC verification is already complete.');
-    }
+        if ($profile->identity_verification_status !== 'verified') {
+            throw ValidationException::withMessages([
+                'identity' => 'Complete Sumsub identity verification before submitting your bank account.',
+            ]);
+        }
 
-    $bankCode = (string) $data['bank_code'];
-    $accountNumber = (string) $data['account_number'];
+        if ($profile->status === 'verified') {
+            abort(409, 'Your KYC verification is already complete.');
+        }
 
-    try {
-        $banks = $this->paystack->listBanks();
-    } catch (\Throwable $exception) {
-        Log::error('Paystack: Could not retrieve bank list.', [
-            'user_id' => $user->id,
-            'exception' => $exception::class,
-        ]);
+        $bankCode = (string) $data['bank_code'];
+        $accountNumber = (string) $data['account_number'];
 
-        throw ValidationException::withMessages([
-            'bank_code' => 'We could not load bank information. Please try again shortly.',
-        ]);
-    }
+        // Confirm that the selected code belongs to Korapay.
+        try {
+            $banks = $this->korapay->listBanks();
+        } catch (\Throwable $exception) {
+            Log::error('Korapay: Could not retrieve bank list.', [
+                'user_id' => $user->id,
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ]);
 
-    $selectedBank = collect($banks)->first(
-        fn (array $bank) => (string) $bank['code'] === $bankCode
-    );
+            throw ValidationException::withMessages([
+                'bank_code' => 'We could not retrieve bank information. Please try again shortly.',
+            ]);
+        }
 
-    if (! $selectedBank) {
-        throw ValidationException::withMessages([
-            'bank_code' => 'Please select a valid bank from the bank list.',
-        ]);
-    }
-
-    // Resolve the account BEFORE saving the submitted bank details.
-    try {
-        $resolved = $this->paystack->resolveAccount(
-            $accountNumber,
-            (string) $selectedBank['code'],
+        $selectedBank = collect($banks)->first(
+            fn (array $bank) => (string) $bank['code'] === $bankCode
         );
-    } catch (\Throwable $exception) {
-        Log::warning('Paystack: Bank account resolution failed.', [
-            'user_id' => $user->id,
-            'bank_code' => $selectedBank['code'],
-            'exception' => $exception::class,
-        ]);
 
-        throw ValidationException::withMessages([
-            'account_number' => 'Paystack could not verify this account. Check your bank and account number, then try again.',
-        ]);
+        if (! $selectedBank) {
+            throw ValidationException::withMessages([
+                'bank_code' => 'Please select a valid Korapay bank.',
+            ]);
+        }
+
+        // Verify the account directly with Korapay.
+        try {
+            $resolved = $this->korapay->resolveAccount(
+                $accountNumber,
+                (string) $selectedBank['code'],
+            );
+        } catch (\Throwable $exception) {
+            Log::warning('Korapay: Bank account resolution failed.', [
+                'user_id' => $user->id,
+                'bank_code' => $selectedBank['code'],
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ]);
+
+            throw ValidationException::withMessages([
+                'account_number' => 'Korapay could not verify this account. Check your bank and account number, then try again.',
+            ]);
+        }
+
+        // Save both KYC and user status atomically.
+        return DB::transaction(function () use (
+            $user,
+            $profile,
+            $selectedBank,
+            $resolved,
+            $accountNumber
+        ) {
+            $lockedProfile = KycProfile::query()
+                ->whereKey($profile->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            // Recheck identity status in case it changed during account resolution.
+            if ($lockedProfile->identity_verification_status !== 'verified') {
+                throw ValidationException::withMessages([
+                    'identity' => 'Your identity verification must be completed before bank verification.',
+                ]);
+            }
+
+            if ($lockedProfile->status === 'verified') {
+                abort(409, 'Your KYC verification is already complete.');
+            }
+
+            $lockedProfile->forceFill([
+                'bank_name' => $resolved['bank_name'] ?? $selectedBank['name'],
+                'bank_code' => $resolved['bank_code'] ?? $selectedBank['code'],
+                'account_number' => $resolved['account_number'] ?? $accountNumber,
+                'account_name' => $resolved['account_name'],
+                'bank_verification_status' => 'verified',
+                'bank_verification_reference' => $resolved['reference'] ?? null,
+                'bank_verified_at' => now(),
+                'submitted_ip' => request()->ip(),
+                'status' => 'verified',
+                'rejection_reason' => null,
+            ])->save();
+
+            $user->forceFill([
+                'kyc_status' => 'verified',
+            ])->save();
+
+            Log::info('Korapay: Bank account verified and KYC completed.', [
+                'user_id' => $user->id,
+                'profile_id' => $lockedProfile->id,
+            ]);
+
+            return $lockedProfile->fresh();
+        });
     }
 
-    // Save the bank details only after Paystack returns a verified account name.
-    $profile->forceFill([
-        'bank_name' => $selectedBank['name'],
-        'bank_code' => $selectedBank['code'],
-        'account_number' => $resolved['account_number'] ?? $accountNumber,
-        'account_name' => $resolved['account_name'],
-        'bank_verification_status' => 'verified',
-        'bank_verification_reference' => null,
-        'bank_verified_at' => now(),
-        'submitted_ip' => request()->ip(),
-        'status' => 'verified',
-        'rejection_reason' => null,
-    ])->save();
-
-    $user->forceFill([
-        'kyc_status' => 'verified',
-    ])->save();
-
-    Log::info('Paystack: Bank account verified and KYC completed.', [
-        'user_id' => $user->id,
-        'profile_id' => $profile->id,
-    ]);
-
-    return $profile->fresh();
-}
 
     /**
      * Start or resume the Sumsub verification session.
