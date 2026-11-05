@@ -8,43 +8,53 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class EquityRound extends Model
 {
-    protected $fillable = [
-        'product_id',
-        'name',
-        'status',
-        'valuation',
-        'price_per_unit',
-        'total_units',
-        'available_units',
-        'minimum_ticket',
-        'maximum_ticket',
-        'opens_at',
-        'closes_at',
-    ];
+	protected $fillable = [
+		'product_id',
+		'name',
+		'status',
+		'valuation',
+		'price_per_unit',
+		'total_units',
+		'available_units',
+		'minimum_ticket',
+		'maximum_ticket',
+		'opens_at',
+		'closes_at',
+	];
 
-    protected $casts = [
-        'valuation' => 'decimal:2',
-        'price_per_unit' => 'decimal:2',
-        'minimum_ticket' => 'decimal:2',
-        'maximum_ticket' => 'decimal:2',
-        'total_units' => 'decimal:6',
-        'available_units' => 'decimal:6',
-        'opens_at' => 'datetime',
-        'closes_at' => 'datetime',
-    ];
+	protected $casts = [
+		'valuation' => 'decimal:2',
+		'price_per_unit' => 'decimal:6',
+		'minimum_ticket' => 'decimal:2',
+		'maximum_ticket' => 'decimal:2',
+		'total_units' => 'decimal:6',
+		'available_units' => 'decimal:6',
+		'opens_at' => 'datetime',
+		'closes_at' => 'datetime',
+	];
 
-    public function product(): BelongsTo
-    {
-        return $this->belongsTo(Product::class);
-    }
+	public function product(): BelongsTo
+	{
+		return $this->belongsTo(Product::class);
+	}
 
-    public function investments(): HasMany
-    {
-        return $this->hasMany(EquityInvestment::class);
-    }
+	public function investments(): HasMany
+	{
+		return $this->hasMany(EquityInvestment::class);
+	}
 
-    public function getRemainingUnitsAttribute(): string
-    {
-        return (string) $this->available_units;
-    }
+	public function getRemainingUnitsAttribute(): string
+	{
+		return (string) $this->available_units;
+	}
+
+		public function holdings(): HasMany
+	{
+		return $this->hasMany(EquityHolding::class);
+	}
+
+	public function ownershipTransactions(): HasMany
+	{
+		return $this->hasMany(EquityOwnershipTransaction::class);
+	}
 }

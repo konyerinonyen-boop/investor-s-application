@@ -59,6 +59,7 @@ return [
     ),
     'level_name' => env('SUMSUB_LEVEL_NAME'),
     'webhook_secret' => env('SUMSUB_WEBHOOK_SECRET'),
+    'applicant_url_template' => env('SUMSUB_APPLICANT_URL_TEMPLATE'),
 ],
 
 

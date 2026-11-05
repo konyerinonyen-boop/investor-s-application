@@ -4,12 +4,15 @@ namespace App\Models;
 
 use \Illuminate\Auth\MustVerifyEmail as MustVerifyEmailTrait;
 use App\Models\Document;
+use App\Models\EquityHolding;
 use App\Models\EquityInvestment;
+use App\Models\EquityOwnershipTransaction;
 use App\Models\KycProfile;
 use App\Models\Loan;
 use App\Models\Notification;
 use App\Models\Payment;
 use App\Models\Wallet;
+use App\Models\WalletTransaction;
 use App\Notifications\VerifyEmailNotification;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Models\Contracts\HasName;
@@ -17,6 +20,7 @@ use Filament\Panel;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -113,4 +117,17 @@ public function getFullNameAttribute(): string
             Wallet::class
         );
     }
+    public function equityHoldings(): HasMany
+    {
+        return $this->hasMany(EquityHolding::class, 'investor_id');
+    }
+
+    public function equityOwnershipTransactions(): HasMany
+    {
+        return $this->hasMany(
+            EquityOwnershipTransaction::class,
+            'investor_id'
+        );
+    }
+
 }
