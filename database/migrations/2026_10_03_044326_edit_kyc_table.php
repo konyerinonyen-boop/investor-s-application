@@ -55,9 +55,9 @@ return new class extends Migration
             //  $table->dropColumn('is_verified');
 
         //before editing the table, we need to add the new columns
-             $table->enum('account_type', ['individual', 'entity'])->default('individual');
-             $table->string('first_name');
-             $table->string('last_name');
+             $table->enum('account_type', ['individual', 'entity'])->nullable()->default('individual');
+             $table->string('first_name')->nullable();
+             $table->string('last_name')->nullable();
         });
 
     }

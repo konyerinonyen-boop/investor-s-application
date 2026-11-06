@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Filament\Support\AdminResource;
 use App\Listeners\AuditPermissionActivity;
 use App\Models\AuditLog;
 use App\Models\Document;
@@ -17,6 +18,8 @@ use App\Models\RepaymentSchedule;
 use App\Models\User;
 use App\Observers\AuditActivityObserver;
 use App\Observers\UserObserver;
+use BezhanSalleh\FilamentShield\Facades\FilamentShield;
+use BezhanSalleh\FilamentShield\Resources\Roles\RoleResource as ShieldRoleResource;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
@@ -42,9 +45,33 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Schema::defaultStringLength(191);
-    // Automatically create a wallet whenever a user is created.
+        // Automatically create a wallet whenever a user is created.
         User::observe(UserObserver::class);
-        
+
+        FilamentShield::buildPermissionKeyUsing(
+            static function (
+                string $entity,
+                ?string $affix,
+                string $subject,
+            ): ?string {
+                if ($entity === ShieldRoleResource::class) {
+                    return match ($affix) {
+                        'viewAny', 'view' => 'view roles',
+                        'create', 'update', 'delete', 'deleteAny' => 'manage roles',
+                        default => null,
+                    };
+                }
+
+                if (is_subclass_of($entity, AdminResource::class)) {
+                    return $affix === null
+                        ? null
+                        : $entity::shieldPermissionName($affix);
+                }
+
+                return null;
+            }
+        );
+
         Gate::before(function (User $user, string $ability): ?bool {
             return $user->hasRole('super_admin') ? true : null;
         });

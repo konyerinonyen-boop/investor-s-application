@@ -2,6 +2,8 @@
 
 namespace Database\Seeders;
 
+use BezhanSalleh\FilamentShield\Facades\FilamentShield;
+use Filament\Facades\Filament;
 use Illuminate\Database\Seeder;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
@@ -13,30 +15,8 @@ class RolesAndPermissionsSeeder extends Seeder
     {
         app(PermissionRegistrar::class)->forgetCachedPermissions();
 
-        $resources = [
-            'users',
-            'products',
-            'equity rounds',
-            'equity investments',
-            'loan offers',
-            'loans',
-            'KYC profiles',
-            'documents',
-            'payments',
-            'repayment schedules',
-            'notifications',
-        ];
-
-        $permissions = ['access admin panel', 'manage user roles', 'view roles', 'manage roles'];
-
-        foreach ($resources as $resource) {
-            foreach (['view', 'create', 'update', 'delete'] as $action) {
-                $permissions[] = "{$action} {$resource}";
-            }
-        }
-
-        $permissions[] = 'view activity logs';
-        $permissions = array_values(array_unique($permissions));
+        Filament::setCurrentPanel(Filament::getPanel('admin'));
+        $permissions = FilamentShield::getEntitiesPermissions() ?? [];
 
         foreach ($permissions as $permission) {
             Permission::findOrCreate($permission, 'web');
@@ -45,21 +25,19 @@ class RolesAndPermissionsSeeder extends Seeder
         Role::findOrCreate('super_admin', 'web')->syncPermissions($permissions);
         Role::findOrCreate('admin', 'web')->syncPermissions(array_values(array_diff($permissions, ['manage roles'])));
 
-        $operationsResources = [
-            'products',
-            'equity rounds',
-            'equity investments',
-            'loan offers',
-            'loans',
-            'KYC profiles',
-            'documents',
-            'payments',
-            'repayment schedules',
-        ];
-
         Role::findOrCreate('operations', 'web')->syncPermissions([
             'access admin panel',
-            ...$this->permissionsFor($operationsResources),
+            ...$this->permissionsFor([
+                'products',
+                'equity rounds',
+                'equity investments',
+                'loan offers',
+                'loans',
+                'KYC profiles',
+                'documents',
+                'payments',
+                'repayment schedules',
+            ]),
         ]);
 
         Role::findOrCreate('support', 'web')->syncPermissions([
@@ -76,7 +54,19 @@ class RolesAndPermissionsSeeder extends Seeder
             'access admin panel',
             'view roles',
             'view activity logs',
-            ...$this->permissionsFor($resources, ['view']),
+            ...$this->permissionsFor([
+                'users',
+                'products',
+                'equity rounds',
+                'equity investments',
+                'loan offers',
+                'loans',
+                'KYC profiles',
+                'documents',
+                'payments',
+                'repayment schedules',
+                'notifications',
+            ], ['view']),
         ]);
 
         app(PermissionRegistrar::class)->forgetCachedPermissions();

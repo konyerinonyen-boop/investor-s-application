@@ -20,6 +20,7 @@ class EquityOwnershipTransaction extends Model
         'reference',
         'occurred_at',
         'metadata',
+        'marketplace_trade_id',
     ];
 
     protected $casts = [
@@ -53,6 +54,14 @@ class EquityOwnershipTransaction extends Model
         return $this->belongsTo(
             User::class,
             'counterparty_investor_id'
+        );
+    }
+
+    public function marketplaceTrade(): BelongsTo
+    {
+        return $this->belongsTo(
+            EquityMarketplaceTrade::class,
+            'marketplace_trade_id'
         );
     }
 }

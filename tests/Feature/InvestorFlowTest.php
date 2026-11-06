@@ -19,6 +19,7 @@ class InvestorFlowTest extends TestCase
             'name' => 'Alice Investor',
             'email' => 'alice@example.com',
             'password' => 'secret123',
+            'password_confirmation' => 'secret123',
         ]);
 
         $response->assertStatus(201)
@@ -40,7 +41,12 @@ class InvestorFlowTest extends TestCase
     {
         $user = User::create([
             'name' => 'Bob Investor',
+            'first_name' => 'Bob',
+            'last_name' => 'Investor',
             'email' => 'bob@example.com',
+            'phone' => '+2348000000001',
+            'country' => 'Nigeria',
+            'account_type' => 'individual',
             'password' => Hash::make('secret123'),
             'kyc_status' => 'not_started',
             'status' => 'active',
@@ -107,7 +113,12 @@ class InvestorFlowTest extends TestCase
 
         $user = User::create([
             'name' => 'Clara Investor',
+            'first_name' => 'Clara',
+            'last_name' => 'Investor',
             'email' => 'clara@example.com',
+            'phone' => '+2348000000002',
+            'country' => 'Nigeria',
+            'account_type' => 'individual',
             'password' => Hash::make('secret123'),
             'kyc_status' => 'verified',
             'status' => 'active',

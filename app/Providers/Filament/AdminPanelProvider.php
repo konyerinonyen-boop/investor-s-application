@@ -5,6 +5,7 @@ namespace App\Providers\Filament;
 use App\Filament\Widgets\ActivityTrendChart;
 use App\Filament\Widgets\AdminOverviewStats;
 use App\Filament\Widgets\RecentActivity;
+use BezhanSalleh\FilamentShield\FilamentShieldPlugin;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Navigation\NavigationGroup;
 use Filament\Pages;
@@ -45,6 +46,11 @@ class AdminPanelProvider extends PanelProvider
                 NavigationGroup::make()->label('System'),
             ])
             ->sidebarCollapsibleOnDesktop()
+            ->plugins([
+                FilamentShieldPlugin::make()
+                    ->navigationGroup('People & Access')
+                    ->navigationLabel('Roles & Permissions'),
+            ])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->pages([

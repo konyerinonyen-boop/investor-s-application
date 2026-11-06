@@ -2,21 +2,11 @@
 
 namespace App\Models;
 
-use \Illuminate\Auth\MustVerifyEmail as MustVerifyEmailTrait;
-use App\Models\Document;
-use App\Models\EquityHolding;
-use App\Models\EquityInvestment;
-use App\Models\EquityOwnershipTransaction;
-use App\Models\KycProfile;
-use App\Models\Loan;
-use App\Models\Notification;
-use App\Models\Payment;
-use App\Models\Wallet;
-use App\Models\WalletTransaction;
 use App\Notifications\VerifyEmailNotification;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Models\Contracts\HasName;
 use Filament\Panel;
+use Illuminate\Auth\MustVerifyEmail as MustVerifyEmailTrait;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -28,9 +18,9 @@ use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
 #[Hidden(['password', 'remember_token'])]
-class User extends Authenticatable implements FilamentUser, MustVerifyEmail, HasName
+class User extends Authenticatable implements FilamentUser, HasName, MustVerifyEmail
 {
-    use HasApiTokens, HasFactory, HasRoles, Notifiable, MustVerifyEmailTrait;
+    use HasApiTokens, HasFactory, HasRoles, MustVerifyEmailTrait, Notifiable;
 
     protected $fillable = [
         'first_name',
@@ -49,18 +39,28 @@ class User extends Authenticatable implements FilamentUser, MustVerifyEmail, Has
         'remember_token',
     ];
 
-public function getFilamentName(): string
-{
-    return trim($this->first_name . ' ' . $this->last_name);
-}
+    protected static function booted(): void
+    {
+        static::saving(function (self $user): void {
+            if (empty($user->name) && ($user->first_name || $user->last_name)) {
+                $user->name = trim(($user->first_name ?? '').' '.($user->last_name ?? ''));
+            }
+        });
+    }
 
-public function getFullNameAttribute(): string
-{
-    return trim($this->first_name .' '. $this->last_name);
-}
+    public function getFilamentName(): string
+    {
+        return trim($this->first_name.' '.$this->last_name);
+    }
+
+    public function getFullNameAttribute(): string
+    {
+        return trim($this->first_name.' '.$this->last_name);
+    }
+
     public function sendEmailVerificationNotification(): void
     {
-        $this->notify(new VerifyEmailNotification());
+        $this->notify(new VerifyEmailNotification);
     }
 
     protected function casts(): array
@@ -98,8 +98,9 @@ public function getFullNameAttribute(): string
 
     public function payments()
     {
-        return $this->hasMany(Payment::class,'');
+        return $this->hasMany(Payment::class, '');
     }
+
     public function notifications()
     {
         return $this->hasMany(Notification::class);
@@ -117,6 +118,7 @@ public function getFullNameAttribute(): string
             Wallet::class
         );
     }
+
     public function equityHoldings(): HasMany
     {
         return $this->hasMany(EquityHolding::class, 'investor_id');
@@ -130,4 +132,24 @@ public function getFullNameAttribute(): string
         );
     }
 
+    public function equityListings(): HasMany
+    {
+        return $this->hasMany(EquityListing::class, 'seller_id');
+    }
+
+    public function marketplaceSales(): HasMany
+    {
+        return $this->hasMany(
+            EquityMarketplaceTrade::class,
+            'seller_id'
+        );
+    }
+
+    public function marketplacePurchases(): HasMany
+    {
+        return $this->hasMany(
+            EquityMarketplaceTrade::class,
+            'buyer_id'
+        );
+    }
 }

@@ -34,6 +34,15 @@ class FinancialDomainTest extends TestCase
 
     public function test_loan_offer_generates_a_valid_repayment_schedule(): void
     {
+        $investor = \App\Models\User::create([
+            'name' => 'Bridge Investor',
+            'first_name' => 'Bridge',
+            'last_name' => 'Investor',
+            'email' => 'bridge@example.com',
+            'password' => bcrypt('secret123'),
+            'status' => 'active',
+        ]);
+
         $offer = LoanOffer::create([
             'name' => 'Bridge Loan',
             'status' => 'active',
@@ -46,7 +55,7 @@ class FinancialDomainTest extends TestCase
 
         $loan = Loan::create([
             'loan_offer_id' => $offer->id,
-            'investor_id' => 1,
+            'investor_id' => $investor->id,
             'principal_amount' => '10000.00',
             'interest_rate' => '14.50',
             'term_months' => 12,
