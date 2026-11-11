@@ -13,7 +13,9 @@ use App\Http\Controllers\PaymentController;
 use App\Http\Middleware\LogApiActivity;
 use Illuminate\Support\Facades\Route;
 
-Route::prefix('v1')->middleware(LogApiActivity::class)->group(function () {
+Route::prefix('v1')
+    ->middleware([LogApiActivity::class, 'api.key'])
+    ->group(function () {
     Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
     /*
     |--------------------------------------------------------------------------
@@ -21,13 +23,14 @@ Route::prefix('v1')->middleware(LogApiActivity::class)->group(function () {
     |--------------------------------------------------------------------------
     */
 
-    Route::get(
+        Route::get(
         '/email/verify/{id}/{hash}',
-        VerifyEmailController::class)->middleware([
-            'signed',
-            'throttle:6,1',
-        ])
-        ->name('verification.verify');
+        VerifyEmailController::class
+    )->middleware([
+        'signed',
+        'throttle:6,1',
+    ])->withoutMiddleware('api.key')
+    ->name('verification.verify');
     /*
     |--------------------------------------------------------------------------
     | Resend Verification Email
@@ -99,10 +102,14 @@ Route::prefix('v1')->middleware(LogApiActivity::class)->group(function () {
             'purchase',
         ]);
     });
-    Route::post('webhook/{provider}', [PaymentController::class, 'webhook']);
+        Route::post('webhook/{provider}', [
+            PaymentController::class,
+            'webhook',
+        ])->withoutMiddleware('api.key');
 
-    Route::post(
-        '/webhooks/sumsub',
-        SumsubWebhookController::class
-    )->middleware('throttle:120,1');
+        Route::post(
+            '/webhooks/sumsub',
+                SumsubWebhookController::class
+            )->middleware('throttle:120,1')
+            ->withoutMiddleware('api.key');
 });

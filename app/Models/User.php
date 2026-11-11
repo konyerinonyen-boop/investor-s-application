@@ -2,6 +2,17 @@
 
 namespace App\Models;
 
+use App\Models\Document;
+use App\Models\EquityHolding;
+use App\Models\EquityInvestment;
+use App\Models\EquityListing;
+use App\Models\EquityMarketplaceTrade;
+use App\Models\EquityOwnershipTransaction;
+use App\Models\KycProfile;
+use App\Models\Loan;
+use App\Models\Payment;
+use App\Models\Wallet;
+use App\Models\WalletTransaction;
 use App\Notifications\VerifyEmailNotification;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Models\Contracts\HasName;
@@ -14,6 +25,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Notification;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
@@ -38,15 +50,6 @@ class User extends Authenticatable implements FilamentUser, HasName, MustVerifyE
         'password',
         'remember_token',
     ];
-
-    protected static function booted(): void
-    {
-        static::saving(function (self $user): void {
-            if (empty($user->name) && ($user->first_name || $user->last_name)) {
-                $user->name = trim(($user->first_name ?? '').' '.($user->last_name ?? ''));
-            }
-        });
-    }
 
     public function getFilamentName(): string
     {

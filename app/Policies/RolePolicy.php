@@ -1,41 +1,45 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Policies;
 
-use App\Models\User;
+use Illuminate\Foundation\Auth\User as AuthUser;
 use Spatie\Permission\Models\Role;
+use Illuminate\Auth\Access\HandlesAuthorization;
 
 class RolePolicy
 {
-    public function viewAny(User $user): bool
+    use HandlesAuthorization;
+    
+    public function viewAny(AuthUser $authUser): bool
     {
-        return $user->can('view roles');
+        return $authUser->can('view roles');
     }
 
-    public function view(User $user, Role $role): bool
+    public function view(AuthUser $authUser, Role $role): bool
     {
-        return $user->can('view roles');
+        return $authUser->can('view roles');
     }
 
-    public function create(User $user): bool
+    public function create(AuthUser $authUser): bool
     {
-        return $user->can('manage roles');
+        return $authUser->can('manage roles');
     }
 
-    public function update(User $user, Role $role): bool
+    public function update(AuthUser $authUser, Role $role): bool
     {
-        return $role->name !== 'super_admin'
-            && $user->can('manage roles');
+        return $authUser->can('manage roles');
     }
 
-    public function delete(User $user, Role $role): bool
+    public function delete(AuthUser $authUser, Role $role): bool
     {
-        return $role->name !== 'super_admin'
-            && $user->can('manage roles');
+        return $authUser->can('manage roles');
     }
 
-    public function deleteAny(User $user): bool
+    public function deleteAny(AuthUser $authUser): bool
     {
-        return false;
+        return $authUser->can('manage roles');
     }
+
 }
