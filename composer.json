@@ -13,6 +13,7 @@
         "jtargosz/laravel-action-otp": "^2.0",
         "laravel/framework": "^13.17",
         "laravel/sanctum": "^4.3",
+        "laravel/socialite": "*",
         "laravel/tinker": "^3.0",
         "predis/predis": "*",
         "spatie/laravel-permission": "^8.3"

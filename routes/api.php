@@ -7,16 +7,25 @@ use App\Http\Controllers\Api\V1\KycController;
 use App\Http\Controllers\Api\V1\OpportunityController;
 use App\Http\Controllers\Api\V1\PortfolioController;
 use App\Http\Controllers\Api\V1\SumsubWebhookController;
+use App\Http\Controllers\Auth\GoogleAuthController;
 use App\Http\Controllers\Auth\ResendVerificationEmailController;
 use App\Http\Controllers\Auth\VerifyEmailController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Middleware\LogApiActivity;
 use Illuminate\Support\Facades\Route;
 
+
 Route::prefix('v1')
     ->middleware([LogApiActivity::class, 'api.key'])
     ->group(function () {
     Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
+
+
+    Route::post(
+    '/auth/google/exchange',
+    [GoogleAuthController::class, 'exchange']
+)->middleware('throttle:10,1')
+->withoutMiddleware('api.key');
     /*
     |--------------------------------------------------------------------------
     | Email Verification
@@ -113,3 +122,4 @@ Route::prefix('v1')
             )->middleware('throttle:120,1')
             ->withoutMiddleware('api.key');
 });
+

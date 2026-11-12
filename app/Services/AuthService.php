@@ -33,7 +33,6 @@ class AuthService
             'phone' => $data['phone'],        
         ]);
 
-        $this->userRepository->assignInvestorRole($user);
      $user->sendEmailVerificationNotification();
         
      return $user;

@@ -44,6 +44,8 @@ class User extends Authenticatable implements FilamentUser, HasName, MustVerifyE
         'kyc_status',
         'country',
         'account_type',
+        'google_id',
+        'avatar',
     ];
 
     protected $hidden = [
