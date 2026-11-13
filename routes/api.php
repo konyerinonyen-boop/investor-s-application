@@ -26,6 +26,12 @@ Route::prefix('v1')
     [GoogleAuthController::class, 'exchange']
 )->middleware('throttle:10,1')
 ->withoutMiddleware('api.key');
+
+Route::post(
+    '/auth/google/prepare',
+    [GoogleAuthController::class, 'prepareGoogleRegistration']
+)->middleware('throttle:10,1')
+  ->withoutMiddleware('api.key');
     /*
     |--------------------------------------------------------------------------
     | Email Verification

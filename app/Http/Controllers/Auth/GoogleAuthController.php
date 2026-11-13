@@ -16,24 +16,87 @@ use Throwable;
 class GoogleAuthController extends Controller
 {
     /**
-     * Redirect the user to Google's authentication page.
+     * API: Validate account type and prepare Google authentication.
      */
-    public function redirectToGoogle()
+    public function prepareGoogleRegistration(Request $request)
     {
+        $validated = $request->validate([
+            'account_type' => ['required', 'string', 'in:individual,entity'],
+        ]);
+
+        // Generate an unpredictable, one-time transaction identifier.
+        $transaction = Str::random(64);
+
+        // Store the selected type temporarily, keyed by a hash.
+        Cache::put(
+            'google_oauth_transaction:' . hash('sha256', $transaction),
+            [
+                'account_type' => $validated['account_type'],
+            ],
+            now()->addMinutes(5)
+        );
+
+        // The browser will visit this URL to begin OAuth.
+        $authorizationUrl = route('google.redirect', [
+            'transaction' => $transaction,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Google authentication is ready.',
+            'data' => [
+                'authorization_url' => $authorizationUrl,
+                'expires_in' => 300,
+            ],
+        ]);
+    }
+
+    /**
+     * Browser: Consume the transaction and start Socialite.
+     */
+    public function redirectToGoogle(string $transaction)
+    {
+        $cacheKey = 'google_oauth_transaction:' .
+            hash('sha256', $transaction);
+
+        // A transaction can only be used once.
+        $registration = Cache::pull($cacheKey);
+
+        if (
+            ! is_array($registration) ||
+            ! in_array(
+                $registration['account_type'] ?? null,
+                ['individual', 'entity'],
+                true
+            )
+        ) {
+            return redirect()->away(
+                rtrim(config('services.frontend_url'), '/') .
+                '/login?error=google_registration_expired'
+            );
+        }
+
+        // Save the selection in the web session.
+        // Socialite will use this same session for OAuth state validation.
+        session([
+            'google_registration.account_type' =>
+                $registration['account_type'],
+        ]);
+
         return Socialite::driver('google')->redirect();
     }
 
     /**
-     * Handle Google's callback.
+     * Browser: Handle Google's callback.
      */
     public function handleGoogleCallback()
     {
         $frontendUrl = rtrim(config('services.frontend_url'), '/');
 
         try {
+            // Keep Socialite's normal state validation enabled.
             $googleUser = Socialite::driver('google')->user();
 
-            // Ensure we received Google's expected user object.
             if (! $googleUser instanceof GoogleUser) {
                 return redirect()->away(
                     $frontendUrl . '/login?error=google_auth_failed'
@@ -41,11 +104,9 @@ class GoogleAuthController extends Controller
             }
 
             $googleData = $googleUser->user;
-
             $email = $googleUser->getEmail();
             $googleId = $googleUser->getId();
 
-            // Verify that Google has verified this email address.
             $emailVerified = filter_var(
                 $googleData['email_verified']
                     ?? $googleData['verified_email']
@@ -64,70 +125,83 @@ class GoogleAuthController extends Controller
                 $googleId,
                 $email
             ) {
-                // First, look for an account already linked to this Google ID.
+                // Existing Google-linked account.
                 $user = User::where('google_id', $googleId)->first();
 
-                if (! $user) {
-                    // Check whether an account already exists with this email.
-                    $user = User::where('email', $email)->first();
-
-                    if ($user) {
-                        // Do not connect an account already linked to
-                        // a different Google account.
-                        if (
-                            $user->google_id &&
-                            $user->google_id !== $googleId
-                        ) {
-                            throw new \RuntimeException(
-                                'This account is already linked to another Google account.'
-                            );
-                        }
-
-                        // Link the existing account to Google.
-                        $user->forceFill([
-                            'google_id' => $googleId,
-                            'avatar' => $googleUser->getAvatar(),
-                            'email_verified_at' => $user->email_verified_at
-                                ?? now(),
-                        ])->save();
-                    } else {
-                        // Create a new normal user account.
-                        // No investor role or other role is assigned.
-                        $user = new User();
-
-                        $user->forceFill([
-                            'first_name' => $googleUser->user['given_name']
-                                ?? $googleUser->getName()
-                                ?? 'User',
-
-                            'last_name' => $googleUser->user['family_name']
-                                ?? '',
-
-                            'email' => $email,
-                            'phone' => null,
-                            'password' => Hash::make(Str::random(64)),
-                            'google_id' => $googleId,
-                            'avatar' => $googleUser->getAvatar(),
-                            'email_verified_at' => now(),
-                            'status' => 'active',
-                            'kyc_status' => 'not_started',
-                            'country' => null,
-                            'account_type' => 'individual',
-                        ])->save();
-                    }
+                if ($user) {
+                    return $user;
                 }
+
+                // Existing account with the same email.
+                $user = User::where('email', $email)->first();
+
+                if ($user) {
+                    if (
+                        $user->google_id &&
+                        $user->google_id !== $googleId
+                    ) {
+                        throw new \RuntimeException(
+                            'This account is already linked to another Google account.'
+                        );
+                    }
+
+                    // Link Google without changing the existing account type.
+                    $user->forceFill([
+                        'google_id' => $googleId,
+                        'avatar' => $googleUser->getAvatar(),
+                        'email_verified_at' =>
+                            $user->email_verified_at ?? now(),
+                    ])->save();
+
+                    return $user;
+                }
+
+                // A new user must have selected an account type.
+                $accountType = session()->pull(
+                    'google_registration.account_type'
+                );
+
+                if (! in_array(
+                    $accountType,
+                    ['individual', 'entity'],
+                    true
+                )) {
+                    throw new \RuntimeException(
+                        'Registration information expired. Please try again.'
+                    );
+                }
+
+                $user = new User();
+
+                $user->forceFill([
+                    'first_name' => $googleData['given_name']
+                        ?? $googleUser->getName()
+                        ?? 'User',
+                    'last_name' => $googleData['family_name'] ?? '',
+                    'email' => $email,
+                    'phone' => null,
+                    'password' => Hash::make(Str::random(64)),
+                    'google_id' => $googleId,
+                    'avatar' => $googleUser->getAvatar(),
+                    'email_verified_at' => now(),
+                    'status' => 'active',
+                    'kyc_status' => 'not_started',
+                    'country' => null,
+                    'account_type' => $accountType,
+                ]);
+
+                $user->save();
 
                 return $user;
             });
 
-            // Only active accounts may authenticate.
             if ($user->status !== 'active') {
                 return redirect()->away(
                     $frontendUrl . '/login?error=account_inactive'
                 );
             }
 
-            // Generate a temporary one-time exchange code.
+            // Create a short-lived, one-time code for the frontend.
             $code = Str::random(64);
 
             Cache::put(
@@ -136,7 +210,6 @@ class GoogleAuthController extends Controller
                 now()->addMinutes(2)
             );
 
-            // Redirect to the frontend with the temporary code.
             return redirect()->away(
                 $frontendUrl . '/auth/google/callback?' .
                 http_build_query(['code' => $code])
@@ -152,8 +225,7 @@ class GoogleAuthController extends Controller
     }
 
     /**
-     * Exchange the temporary Google authorization code
-     * for a Sanctum access token.
+     * API: Exchange the one-time code for a Sanctum token.
      */
     public function exchange(Request $request)
     {
@@ -164,12 +236,12 @@ class GoogleAuthController extends Controller
         $cacheKey = 'google_oauth_exchange:' .
             hash('sha256', $validated['code']);
 
-        // Cache::pull retrieves and deletes the code.
-        // Therefore, the code can only be used once.
+        // Pull means the code cannot be reused.
         $userId = Cache::pull($cacheKey);
 
         if (! $userId) {
             return response()->json([
+                'success' => false,
                 'message' => 'Invalid or expired Google authentication code.',
             ], 401);
         }
@@ -178,25 +250,27 @@ class GoogleAuthController extends Controller
 
         if (! $user) {
             return response()->json([
+                'success' => false,
                 'message' => 'User account not found.',
             ], 404);
         }
 
         if ($user->status !== 'active') {
             return response()->json([
+                'success' => false,
                 'message' => 'Your account is not active.',
             ], 403);
         }
 
-        // Issue the Sanctum token.
         $token = $user->createToken('google-auth')->plainTextToken;
 
         return response()->json([
+            'success' => true,
             'message' => 'Google authentication successful.',
             'data' => [
                 'token' => $token,
                 'token_type' => 'Bearer',
-                'user' => $user,
+                'user' => $user->load('roles'),
             ],
         ]);
     }
