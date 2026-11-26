@@ -16,11 +16,6 @@ class RegisterRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => [
-                'sometimes',
-                'string',
-                'max:255',
-            ],
 
             'first_name' => [
                 'required_without:name',
@@ -63,13 +58,13 @@ class RegisterRequest extends FormRequest
             ],
 
             'country' => [
-                'required',
+                'sometimes',
                 'string',
                 'max:100',
             ],
 
             'account_type' => [
-                'required',
+                'sometimes',
                 'string',
                 Rule::in(['individual', 'entity']),
             ],

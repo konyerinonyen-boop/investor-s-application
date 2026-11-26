@@ -28,8 +28,8 @@ class AuthService
             'password' => Hash::make($data['password']),
             'kyc_status' => 'not_started',
             'status' => 'active',
-            'country' => $data['country'],
-            'account_type' => $data['account_type'],
+            'country' => $data['country'] ?? null,
+            'account_type' => $data['account_type'] ?? 'individual',
             'phone' => $data['phone'],        
         ]);
 

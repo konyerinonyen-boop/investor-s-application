@@ -27,11 +27,9 @@ Route::prefix('v1')
 )->middleware('throttle:10,1')
 ->withoutMiddleware('api.key');
 
-Route::post(
-    '/auth/google/prepare',
-    [GoogleAuthController::class, 'prepareGoogleRegistration']
-)->middleware('throttle:10,1')
-  ->withoutMiddleware('api.key');
+  // API key IS required to initiate Google registration/login.
+        Route::post('/auth/google/prepare', [GoogleAuthController::class, 'prepareGoogleRegistration'])
+            ->middleware('throttle:10,1');
     /*
     |--------------------------------------------------------------------------
     | Email Verification
