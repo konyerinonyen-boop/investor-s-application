@@ -1,0 +1,20 @@
+Add these custom permissions near the beginning of RolesAndPermissionsSeeder::run(), after retrieving $permissions:
+
+$dividendWorkflowPermissions = [
+    'declare dividends',
+    'calculate dividend allocations',
+    'approve dividends',
+    'pay dividends',
+];
+
+foreach ($dividendWorkflowPermissions as $permission) {
+    Permission::findOrCreate($permission, 'web');
+}
+
+Then:
+- Add 'dividend declarations' to the resource arrays passed to permissionsFor() for operations and auditor roles (and any other role that should see the resource).
+- Add 'declare dividends' and 'calculate dividend allocations' to the operations role's syncPermissions array if operations should initiate and calculate distributions.
+- Add 'approve dividends' and 'pay dividends' only to the finance/admin role authorized to approve and execute payment.
+- Add all four custom permissions to super_admin and admin role syncPermissions arrays.
+
+Do not give the same person declaration and approval authority for the same distribution; the service blocks self-approval.
